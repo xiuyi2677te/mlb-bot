@@ -206,10 +206,17 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     report = build_full_report()
     await update.message.reply_text(report, parse_mode="Markdown")
 
+# 定時自動推送任務（支援多群組同時發送）
 async def scheduled_push(context: ContextTypes.DEFAULT_TYPE):
     if CHAT_ID:
         report = build_full_report()
-        await context.bot.send_message(chat_id=CHAT_ID, text=report, parse_mode="Markdown")
+        # 自動用逗號分割多個 CHAT_ID 並發送
+        chat_ids = [c.strip() for c in CHAT_ID.split(",") if c.strip()]
+        for cid in chat_ids:
+            try:
+                await context.bot.send_message(chat_id=cid, text=report, parse_mode="Markdown")
+            except Exception as e:
+                print(f"推送至群組 {cid} 失敗: {e}")
 
 # 4. 主程式啟動
 def main():
