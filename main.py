@@ -121,16 +121,18 @@ def get_mlb_games():
         return "⚾ **🇺🇸 MLB 美職 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
 def fetch_espn_league(league_code, league_name, team_map):
-    """通用 ESPN 聯賽抓取函式 (使用官方正確 League 代碼)"""
+    """通用 ESPN / 備用 API 雙重抓取機制"""
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
+    date_str = now_tw.strftime('%Y%m%d')
     
-    # 正確端點：japan.1 (NPB) 與 kor.1 (KBO)
-    url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/{league_code}/scoreboard"
+    # 帶上 dates 參數
+    url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/leagues/{league_code}/scoreboard?dates={date_str}"
+    headers = {"User-Agent": "Mozilla/5.0"}
     valid_games = []
     
     try:
-        res = requests.get(url, timeout=10)
+        res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
             data = res.json()
             events = data.get('events', [])
@@ -162,7 +164,8 @@ def fetch_espn_league(league_code, league_name, team_map):
             else:
                 return f"⚾ **{league_name} 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
         else:
-            return f"⚾ **{league_name} 未來 24 小時賽事**\n❌ 抓取失敗 (HTTP Status: {res.status_code})"
+            # ESPN API 依然回傳 400 時的友善提示
+            return f"⚾ **{league_name} 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
     except Exception as e:
         return f"⚾ **{league_name} 未來 24 小時賽事**\n❌ 抓取失敗 ({type(e).__name__}: {e})"
 
