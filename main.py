@@ -97,57 +97,57 @@ def get_mlb_games():
 
     return "⚾ **🇺🇸 MLB 美職 未來 24 小時賽事**\n\n" + "\n".join([g['text'] for g in valid_games])
 
-def fetch_taiwan_lottery_games(target_keyword, league_title, flag_emoji):
+def fetch_asian_games(alliance_id, league_title, flag_emoji):
     """
-    直接調用台灣運彩 / 玩運彩開放賽事數據 API，精準獲取運彩有開盤的亞洲職棒賽事
+    直接獲取玩運彩即時盤口數據（不寫死任何內容，完全動態抓取）
     """
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
     valid_games = []
 
-    # 台灣運彩/運動彩券賽事數據入口 (Sportslottery API)
-    url = "https://sportapi.sportslottery.com.tw/api/v1/get-matches?sport_id=1"
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+        'Accept': 'application/json, text/plain, */*',
+        'Referer': 'https://www.playsport.cc/'
     }
+
+    # 玩運彩公開輕量 API
+    url = f"https://www.playsport.cc/api/predictgame.php?action=scale&allianceid={alliance_id}"
 
     try:
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
             data = res.json()
-            matches = data.get('matches', [])
-            for m in matches:
-                league_name = m.get('leagueName', '')
-                if target_keyword in league_name:
-                    # 抓取比賽時間
-                    start_time_ms = m.get('startTime', 0)
-                    if start_time_ms:
-                        dt_tw = datetime.datetime.fromtimestamp(start_time_ms / 1000, tz=tz_tw)
-                        if now_tw <= dt_tw <= (now_tw + datetime.timedelta(hours=24)):
-                            away_team = m.get('awayTeamName', '')
-                            home_team = m.get('homeTeamName', '')
-                            time_str = dt_tw.strftime("%m/%d %H:%M")
-                            valid_games.append(f"⏰ **{time_str}** | {away_team} vs {home_team} (預定)")
+            # 解析玩運彩 API 傳回的賽事清單
+            games_list = data.get('games', []) or data.get('data', [])
+            for g in games_list:
+                game_time = g.get('start_time', '') or g.get('time', '')
+                away = g.get('away_name', '') or g.get('away', '')
+                home = g.get('home_name', '') or g.get('home', '')
+                
+                if away and home:
+                    valid_games.append(f"⏰ **{game_time}** | {away} vs {home} (預定)")
     except Exception as e:
-        print(f"台灣運彩 API 抓取失敗: {e}")
+        print(f"抓取 {league_title} 失敗: {e}")
 
-    # 備用方案：若運彩 API 格式變化，使用備用極速開盤網頁 API
+    # 如果上述 API 未返回資料，嘗試第二備援 API 介面
     if not valid_games:
         try:
-            backup_url = "https://m.playsport.cc/api/get_matches.php"
-            b_res = requests.get(backup_url, headers=headers, timeout=5)
+            backup_url = f"https://bf.7m.com.cn/v1/baseball/schedule.json"
+            b_res = requests.get(backup_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
             if b_res.status_code == 200:
                 b_data = b_res.json()
-                for match in b_data.get('list', []):
-                    if target_keyword in match.get('league', ''):
-                        t_str = match.get('time', '')
-                        away = match.get('away', '')
-                        home = match.get('home', '')
-                        valid_games.append(f"⏰ **{t_str}** | {away} vs {home} (預定)")
+                for m in b_data.get('matches', []):
+                    league = m.get('league_name', '')
+                    if league_title.replace(" 賽事", "").split()[-1] in league:
+                        t_str = m.get('time', '')
+                        away = m.get('away_team', '')
+                        home = m.get('home_team', '')
+                        if away and home:
+                            valid_games.append(f"⏰ **{t_str}** | {away} vs {home} (預定)")
         except Exception:
             pass
 
-    # 真實判斷：如果兩邊運彩 API 查詢都真的沒有賽事，才顯示無賽事
     if not valid_games:
         return f"⚾ **{flag_emoji} {league_title} 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
@@ -155,10 +155,10 @@ def fetch_taiwan_lottery_games(target_keyword, league_title, flag_emoji):
     return f"⚾ **{flag_emoji} {league_title} 未來 24 小時賽事**\n\n" + "\n".join(unique_games)
 
 def get_npb_games():
-    return fetch_taiwan_lottery_games("日本", "NPB 日棒", "🇯🇵")
+    return fetch_asian_games(2, "NPB 日棒", "🇯🇵")
 
 def get_kbo_games():
-    return fetch_taiwan_lottery_games("韓國", "KBO 韓職", "🇰🇷")
+    return fetch_asian_games(4, "KBO 韓職", "🇰🇷")
 
 def build_full_report():
     mlb_msg = get_mlb_games()
