@@ -4,7 +4,6 @@ import pytz
 import requests
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from bs4 import BeautifulSoup
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -30,17 +29,22 @@ STATUS_MAP = {
 }
 
 NPB_TEAM_MAP = {
-    "巨人": "讀賣巨人", "阪神": "阪神虎", "中日": "中日龍", "DeNA": "橫濱DeNA", 
-    "広島": "廣島鯉魚", "ヤクルト": "養樂多燕子", "オリックス": "歐力士猛牛", 
-    "ロッテ": "羅德海洋", "ソフトバンク": "軟體銀行鷹", "楽天": "樂天金鷲", 
-    "西武": "西武獅", "日本ハム": "日本火腿鬥士"
+    "Hanshin Tigers": "阪神虎", "Hiroshima Toyo Carp": "廣島鯉魚", "Yomiuri Giants": "讀賣巨人",
+    "Yokohama DeNA BayStars": "橫濱DeNA", "Tokyo Yakult Swallows": "養樂多燕子", "Chunichi Dragons": "中日龍",
+    "Fukuoka SoftBank Hawks": "軟體銀行鷹", "Hokkaido Nippon-Ham Fighters": "日本火腿鬥士",
+    "Chiba Lotte Marines": "羅德海洋", "Tohoku Rakuten Golden Eagles": "樂天金鷲",
+    "Orix Buffaloes": "歐力士猛牛", "Saitama Seibu Lions": "西武獅",
+    "阪神": "阪神虎", "広島": "廣島鯉魚", "巨人": "讀賣巨人", "DeNA": "橫濱DeNA",
+    "ヤクルト": "養樂多燕子", "中日": "中日龍", "ソフトバンク": "軟體銀行鷹", "日本ハム": "日本火腿鬥士",
+    "ロッテ": "羅德海洋", "楽天": "樂天金鷲", "オリックス": "歐力士猛牛", "西武": "西武獅"
 }
 
 KBO_TEAM_MAP = {
-    "두산": "斗山熊", "LG": "LG雙子", "키움": "培證英雄", "SSG": "SSG登陸者", 
-    "KT": "KT巫師", "NC": "NC恐龍", "삼성": "三星獅", "롯데": "樂天巨人", 
-    "KIA": "起亞虎", "한화": "韓華鷹", "Doosan": "斗山熊", "Lotte": "樂天巨人",
-    "Kia": "起亞虎", "Hanwha": "韓華鷹", "Samsung": "三星獅", "Kiwoom": "培證英雄"
+    "Doosan Bears": "斗山熊", "LG Twins": "LG雙子", "Kiwoom Heroes": "培證英雄",
+    "SSG Landers": "SSG登陸者", "KT Wiz": "KT巫師", "NC Dinos": "NC恐龍",
+    "Samsung Lions": "三星獅", "Lotte Giants": "樂天巨人", "KIA Tigers": "起亞虎", "Hanwha Eagles": "韓華鷹",
+    "두산": "斗山熊", "LG": "LG雙子", "키움": "培證英雄", "SSG": "SSG登陸者",
+    "KT": "KT巫師", "NC": "NC恐龍", "삼성": "三星獅", "롯데": "樂天巨人", "KIA": "起亞虎", "한화": "韓華鷹"
 }
 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -115,35 +119,39 @@ def get_mlb_games():
 def get_npb_games():
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
-    
-    url = "https://baseball.yahoo.co.jp/npb/schedule/"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-    
     valid_games = []
+    
+    # 採用多伺服器 CDN 數據源，避免跨國抓取被封鎖
+    today_str = now_tw.strftime("%Y-%m-%d")
+    url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/npb/scoreboard?dates={now_tw.strftime('%Y%m%d')}"
+    
     try:
-        res = requests.get(url, headers=headers, timeout=10)
+        res = requests.get(url, timeout=10)
         if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            sections = soup.find_all('section', class_='bb-score') or soup.find_all('tr', class_='bb-scoreTable__row')
-            
-            for sec in sections:
-                teams = sec.find_all('p', class_='bb-score__team') or sec.find_all('a', class_='bb-scoreTable__team')
-                time_tag = sec.find('span', class_='bb-score__time') or sec.find('span', class_='bb-score__state') or sec.find('td', class_='bb-scoreTable__state')
+            data = res.json()
+            for event in data.get('events', []):
+                status_state = event.get('status', {}).get('type', {}).get('state', 'pre')
+                status_zh = "預定" if status_state == "pre" else "進行中" if status_state == "in" else "完賽"
                 
-                if len(teams) >= 2 and time_tag:
-                    away_raw = teams[0].text.strip()
-                    home_raw = teams[1].text.strip()
-                    time_raw = time_tag.text.strip()
+                date_utc_str = event.get('date', '')
+                if date_utc_str:
+                    utc_dt = datetime.datetime.fromisoformat(date_utc_str.replace('Z', '+00:00'))
+                    tw_dt = utc_dt.astimezone(tz_tw)
+                    time_display = tw_dt.strftime("%m/%d %H:%M")
+                else:
+                    time_display = now_tw.strftime("%m/%d 17:00")
                     
-                    away_zh = NPB_TEAM_MAP.get(away_raw, away_raw)
-                    home_zh = NPB_TEAM_MAP.get(home_raw, home_raw)
+                competitors = event.get('competitions', [{}])[0].get('competitors', [])
+                if len(competitors) >= 2:
+                    home_team_en = competitors[0].get('team', {}).get('displayName', '')
+                    away_team_en = competitors[1].get('team', {}).get('displayName', '')
                     
-                    today_date = now_tw.strftime("%m/%d")
-                    valid_games.append(f"⏰ **{today_date} {time_raw}** | {away_zh} vs {home_zh}")
+                    home_zh = NPB_TEAM_MAP.get(home_team_en, home_team_en)
+                    away_zh = NPB_TEAM_MAP.get(away_team_en, away_team_en)
+                    
+                    valid_games.append(f"⏰ **{time_display}** | {away_zh} vs {home_zh} ({status_zh})")
     except Exception as e:
-        print(f"NPB Error: {e}")
+        print(f"NPB 數據讀取失敗: {e}")
 
     if not valid_games:
         return "⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
@@ -154,34 +162,38 @@ def get_npb_games():
 def get_kbo_games():
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
-    
-    today_str = now_tw.strftime("%Y%m%d")
-    tomorrow_str = (now_tw + datetime.timedelta(days=1)).strftime("%Y%m%d")
-    
     valid_games = []
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-
-    for date_compact in [today_str, tomorrow_str]:
-        try:
-            res = requests.get(f"https://api-gw.sports.naver.com/schedule/games?gameType=KBO&date={date_compact}", headers=headers, timeout=10)
-            if res.status_code == 200:
-                data = res.json()
-                games = data.get('content', {}).get('games', [])
-                for g in games:
-                    away_raw = g.get('awayTeamName', '')
-                    home_raw = g.get('homeTeamName', '')
-                    time_raw = g.get('gameTime', '')
-                    status_raw = g.get('statusCode', 'SCHEDULED')
+    
+    # 採用全球 API 節點，解決 Render 美國 IP 被 Naver 阻擋問題
+    url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/kbo/scoreboard?dates={now_tw.strftime('%Y%m%d')}"
+    
+    try:
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            for event in data.get('events', []):
+                status_state = event.get('status', {}).get('type', {}).get('state', 'pre')
+                status_zh = "預定" if status_state == "pre" else "進行中" if status_state == "in" else "完賽"
+                
+                date_utc_str = event.get('date', '')
+                if date_utc_str:
+                    utc_dt = datetime.datetime.fromisoformat(date_utc_str.replace('Z', '+00:00'))
+                    tw_dt = utc_dt.astimezone(tz_tw)
+                    time_display = tw_dt.strftime("%m/%d %H:%M")
+                else:
+                    time_display = now_tw.strftime("%m/%d 17:30")
                     
-                    if away_raw and home_raw and time_raw:
-                        away_zh = KBO_TEAM_MAP.get(away_raw, away_raw)
-                        home_zh = KBO_TEAM_MAP.get(home_raw, home_raw)
-                        status_zh = "預定" if status_raw in ["SCHEDULED", "BEFORE"] else "進行中" if status_raw == "LIVE" else "完賽"
-                        
-                        date_display = f"{date_compact[4:6]}/{date_compact[6:8]}"
-                        valid_games.append(f"⏰ **{date_display} {time_raw}** | {away_zh} vs {home_zh} ({status_zh})")
-        except Exception:
-            pass
+                competitors = event.get('competitions', [{}])[0].get('competitors', [])
+                if len(competitors) >= 2:
+                    home_team_en = competitors[0].get('team', {}).get('displayName', '')
+                    away_team_en = competitors[1].get('team', {}).get('displayName', '')
+                    
+                    home_zh = KBO_TEAM_MAP.get(home_team_en, home_team_en)
+                    away_zh = KBO_TEAM_MAP.get(away_team_en, away_team_en)
+                    
+                    valid_games.append(f"⏰ **{time_display}** | {away_zh} vs {home_zh} ({status_zh})")
+    except Exception as e:
+        print(f"KBO 數據讀取失敗: {e}")
 
     if not valid_games:
         return "⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
