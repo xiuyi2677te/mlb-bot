@@ -2,6 +2,7 @@ import os
 import datetime
 import pytz
 import requests
+from bs4 import BeautifulSoup
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -23,6 +24,14 @@ MLB_TEAM_MAP = {
 STATUS_MAP = {
     "Scheduled": "預定", "Pre-Game": "賽前", "In Progress": "進行中", 
     "Final": "完賽", "Game Over": "完賽", "Postponed": "延賽", "Cancelled": "取消"
+}
+
+# NPB 隊名日文轉中文
+NPB_TEAM_MAP = {
+    "巨人": "讀賣巨人", "阪神": "阪神虎", "中日": "中日龍", "DeNA": "橫濱DeNA", 
+    "広島": "廣島鯉魚", "ヤクルト": "養樂多燕子", "オリックス": "歐力士猛牛", 
+    "ロッテ": "羅德海洋", "ソフトバンク": "軟體銀行鷹", "楽天": "樂天金鷲", 
+    "西武": "西武獅", "日本ハム": "日本火腿鬥士"
 }
 
 def get_mlb_games():
@@ -87,62 +96,4 @@ def get_npb_games():
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
     
-    # 採用免阻擋之體育數據 API 源 (包含 NPB 日棒)
-    today_str = now_tw.strftime("%Y-%m-%d")
-    tomorrow_str = (now_tw + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-    
-    valid_games = []
-    
-    for date_str in [today_str, tomorrow_str]:
-        # 體育開放賽事數據備援源
-        url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/npb/scoreboard?dates={date_str.replace('-', '')}"
-        try:
-            res = requests.get(url, timeout=10)
-            if res.status_code == 200:
-                data = res.json()
-                events = data.get('events', [])
-                for ev in events:
-                    competition = ev.get('competitions', [{}])[0]
-                    status_str = ev.get('status', {}).get('type', {}).get('shortDetail', '預定')
-                    
-                    competitors = competition.get('competitors', [])
-                    if len(competitors) >= 2:
-                        home_team = competitors[0].get('team', {}).get('displayName', '')
-                        away_team = competitors[1].get('team', {}).get('displayName', '')
-                        
-                        game_utc_str = ev.get('date')
-                        if game_utc_str:
-                            utc_dt = datetime.datetime.fromisoformat(game_utc_str.replace('Z', '+00:00'))
-                            tw_dt = utc_dt.astimezone(tz_tw)
-                            
-                            if now_tw <= tw_dt <= (now_tw + datetime.timedelta(hours=24)):
-                                date_str_display = tw_dt.strftime("%m/%d")
-                                time_str = tw_dt.strftime("%H:%M")
-                                valid_games.append({
-                                    'datetime': tw_dt,
-                                    'text': f"⏰ **{date_str_display} {time_str}** | {away_team} vs {home_team} ({status_str})"
-                                })
-        except Exception:
-            pass
-            
-    valid_games.sort(key=lambda x: x['datetime'])
-
-    if not valid_games:
-        return "⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
-
-    return "⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n\n" + "\n".join([g['text'] for g in valid_games])
-
-def send_telegram_message(message):
-    if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
-        print("❌ 錯誤：未設定 TELEGRAM_BOT_TOKEN 或 CHAT_ID")
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
-    requests.post(url, json=payload)
-
-if __name__ == "__main__":
-    mlb_msg = get_mlb_games()
-    npb_msg = get_npb_games()
-    
-    full_message = f"☀️ **未來 24 小時棒球賽事彙整**\n\n{mlb_msg}\n\n--------------------\n\n{npb_msg}"
-    send_telegram_message(full_message)
+    # 使用日棒 Yahoo 日本體育即時數據源（模擬
