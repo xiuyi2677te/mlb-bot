@@ -88,8 +88,8 @@ def get_mlb_games():
                                 'datetime': tw_dt,
                                 'text': f"⏰ **{date_str_display} {time_str}** | {away_zh} vs {home_zh} ({status_zh})"
                             })
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"MLB API Error: {e}")
 
     valid_games.sort(key=lambda x: x['datetime'])
 
@@ -99,12 +99,60 @@ def get_mlb_games():
         return "⚾ **🇺🇸 MLB 美職 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
 def get_npb_games():
-    """日棒 NPB：採用開放數據備援機制，確保絕不跳出 HTTP 錯誤訊息"""
-    return "⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
+    """日棒 NPB：避開 ESPN 400 封鎖，改用公開體育 API"""
+    tz_tw = pytz.timezone('Asia/Taipei')
+    now_tw = datetime.datetime.now(tz_tw)
+    date_str = now_tw.strftime("%Y-%m-%d")
+    
+    # 使用 TheSportsDB 免費公開 API (NPB 聯賽代碼 4424)
+    url = f"https://www.thesportsdb.com/api/v1/json/3/eventsday.php?d={date_str}&l=4424"
+    valid_games = []
+    
+    try:
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            events = data.get('events') or []
+            for ev in events:
+                event_name = ev.get('strEvent', '')
+                event_time = ev.get('strTime', '')
+                if event_name:
+                    valid_games.append(f"⏰ **{now_tw.strftime('%m/%d')} {event_time[:5]}** | {event_name}")
+    except Exception as e:
+        print(f"NPB Fetch Error: {e}")
+
+    if valid_games:
+        return "⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n\n" + "\n".join(valid_games)
+    else:
+        return "⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
 def get_kbo_games():
-    """韓職 KBO：採用開放數據備援機制，確保絕不跳出 HTTP 錯誤訊息"""
-    return "⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
+    """韓職 KBO：避開 ESPN 400 封鎖，改用公開體育 API"""
+    tz_tw = pytz.timezone('Asia/Taipei')
+    now_tw = datetime.datetime.now(tz_tw)
+    date_str = now_tw.strftime("%Y-%m-%d")
+    
+    # 使用 TheSportsDB 免費公開 API (KBO 聯賽代碼 4425)
+    url = f"https://www.thesportsdb.com/api/v1/json/3/eventsday.php?d={date_str}&l=4425"
+    valid_games = []
+    
+    try:
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            events = data.get('events') or []
+            for ev in events:
+                event_name = ev.get('strEvent', '')
+                event_time = ev.get('strTime', '')
+                if event_name:
+                    valid_games.append(f"⏰ **{now_tw.strftime('%m/%d')} {event_time[:5]}** | {event_name}")
+    except Exception as e:
+        print(f"KBO Fetch Error: {e}")
+
+    if valid_games:
+        return "⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n\n" + "\n".join(valid_games)
+    else:
+        return "⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
 def build_full_report():
     mlb_msg = get_mlb_games()
