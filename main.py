@@ -10,7 +10,6 @@ def get_playsport_games_next_24h(alliance_id, league_name):
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
     
-    # 抓取今天與明天的玩運彩賽事
     today = now_tw.date()
     tomorrow = today + datetime.timedelta(days=1)
     
@@ -30,23 +29,21 @@ def get_playsport_games_next_24h(alliance_id, league_name):
             res = requests.get(url, headers=headers, timeout=10)
             if res.status_code == 200:
                 data = res.json()
-                game_list = data.get('games', [])
+                game_list = data.get('games', []) or []
                 
                 for g in game_list:
-                    away = g.get('away_team_name', '').strip()
-                    home = g.get('home_team_name', '').strip()
-                    time_str = g.get('game_time', '').strip()  # 例如 "06:00" 或 "09:30"
-                    status = g.get('status_name', '預定').strip()
+                    away = str(g.get('away_team_name', '')).strip()
+                    home = str(g.get('home_team_name', '')).strip()
+                    time_str = str(g.get('game_time', '')).strip()
+                    status = str(g.get('status_name', '預定')).strip()
                     
-                    if not (away and home and time_str):
+                    if not (away and home and ":" in time_str):
                         continue
                     
-                    # 解析開打時間，組合成完整的台灣時間 datetime
                     try:
                         h, m = map(int, time_str.split(':'))
                         game_datetime = tz_tw.localize(datetime.datetime(d.year, d.month, d.day, h, m))
                         
-                        # 核心邏輯：只抓「發布當下」到「未來 24 小時內」的比賽
                         if now_tw <= game_datetime <= (now_tw + datetime.timedelta(hours=24)):
                             date_label = game_datetime.strftime("%m/%d")
                             valid_games.append({
@@ -58,7 +55,6 @@ def get_playsport_games_next_24h(alliance_id, league_name):
         except Exception:
             pass
             
-    # 按開打時間排序
     valid_games.sort(key=lambda x: x['datetime'])
     
     if not valid_games:
@@ -73,4 +69,11 @@ def send_telegram_message(message):
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
-    requests.post(url, json
+    requests.post(url, json=payload)
+
+if __name__ == "__main__":
+    mlb_msg = get_playsport_games_next_24h(1, "🇺🇸 MLB 美職")
+    npb_msg = get_playsport_games_next_24h(2, "🇯🇵 NPB 日棒")
+    
+    full_message = f"☀️ **未來 24 小時棒球賽事彙整**\n\n{mlb_msg}\n\n--------------------\n\n{npb_msg}"
+    send_telegram_message(full_message)
