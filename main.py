@@ -28,6 +28,20 @@ STATUS_MAP = {
     "Final": "完賽", "Game Over": "完賽", "Postponed": "延賽", "Cancelled": "取消"
 }
 
+NPB_TEAM_MAP = {
+    "Hanshin Tigers": "阪神虎", "Hiroshima Toyo Carp": "廣島鯉魚", "Yomiuri Giants": "讀賣巨人",
+    "Yokohama DeNA BayStars": "橫濱DeNA", "Tokyo Yakult Swallows": "養樂多燕子", "Chunichi Dragons": "中日龍",
+    "Fukuoka SoftBank Hawks": "軟體銀行鷹", "Hokkaido Nippon-Ham Fighters": "日本火腿鬥士",
+    "Chiba Lotte Marines": "羅德海洋", "Tohoku Rakuten Golden Eagles": "樂天金鷲",
+    "Orix Buffaloes": "歐力士猛牛", "Saitama Seibu Lions": "西武獅"
+}
+
+KBO_TEAM_MAP = {
+    "Doosan Bears": "斗山熊", "LG Twins": "LG雙子", "Kiwoom Heroes": "培證英雄",
+    "SSG Landers": "SSG登陸者", "KT Wiz": "KT巫師", "NC Dinos": "NC恐龍",
+    "Samsung Lions": "三星獅", "Lotte Giants": "樂天巨人", "KIA Tigers": "起亞虎", "Hanwha Eagles": "韓華鷹"
+}
+
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -106,13 +120,13 @@ def get_mlb_games():
     else:
         return "⚾ **🇺🇸 MLB 美職 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
-def fetch_espn_league(league_code, league_name):
-    """通用 ESPN 聯賽抓取函式 (修復 URL 帶法)"""
+def fetch_espn_league(league_code, league_name, team_map):
+    """通用 ESPN 聯賽抓取函式 (使用官方正確 League 代碼)"""
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
     
-    # 修正 API 帶法：leagues 參數帶 npb 或 kbo
-    url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/leagues/{league_code}/scoreboard?dates={now_tw.strftime('%Y%m%d')}"
+    # 正確端點：japan.1 (NPB) 與 kor.1 (KBO)
+    url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/{league_code}/scoreboard"
     valid_games = []
     
     try:
@@ -121,17 +135,30 @@ def fetch_espn_league(league_code, league_name):
             data = res.json()
             events = data.get('events', [])
             for ev in events:
-                name = ev.get('name', '')
-                status = ev.get('status', {}).get('type', {}).get('shortDetail', '預定')
                 date_utc = ev.get('date', '')
                 if date_utc:
                     utc_dt = datetime.datetime.fromisoformat(date_utc.replace('Z', '+00:00'))
                     tw_dt = utc_dt.astimezone(tz_tw)
-                    time_str = tw_dt.strftime("%H:%M")
-                    valid_games.append(f"⏰ **{tw_dt.strftime('%m/%d')} {time_str}** | {name} ({status})")
+                    
+                    if now_tw <= tw_dt <= (now_tw + datetime.timedelta(hours=24)):
+                        status_state = ev.get('status', {}).get('type', {}).get('state', 'pre')
+                        status_zh = "預定" if status_state == "pre" else "進行中" if status_state == "in" else "完賽"
+                        
+                        competitors = ev.get('competitions', [{}])[0].get('competitors', [])
+                        if len(competitors) >= 2:
+                            home_raw = competitors[0].get('team', {}).get('displayName', '')
+                            away_raw = competitors[1].get('team', {}).get('displayName', '')
+
+                            home_zh = team_map.get(home_raw, home_raw)
+                            away_zh = team_map.get(away_raw, away_raw)
+
+                            time_str = tw_dt.strftime("%H:%M")
+                            date_str_display = tw_dt.strftime("%m/%d")
+                            valid_games.append(f"⏰ **{date_str_display} {time_str}** | {away_zh} vs {home_zh} ({status_zh})")
             
             if valid_games:
-                return f"⚾ **{league_name} 未來 24 小時賽事**\n\n" + "\n".join(valid_games)
+                unique_games = list(dict.fromkeys(valid_games))
+                return f"⚾ **{league_name} 未來 24 小時賽事**\n\n" + "\n".join(unique_games)
             else:
                 return f"⚾ **{league_name} 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
         else:
@@ -140,10 +167,10 @@ def fetch_espn_league(league_code, league_name):
         return f"⚾ **{league_name} 未來 24 小時賽事**\n❌ 抓取失敗 ({type(e).__name__}: {e})"
 
 def get_npb_games():
-    return fetch_espn_league("npb", "🇯🇵 NPB 日棒")
+    return fetch_espn_league("japan.1", "🇯🇵 NPB 日棒", NPB_TEAM_MAP)
 
 def get_kbo_games():
-    return fetch_espn_league("kbo", "🇰🇷 KBO 韓職")
+    return fetch_espn_league("kor.1", "🇰🇷 KBO 韓職", KBO_TEAM_MAP)
 
 def build_full_report():
     mlb_msg = get_mlb_games()
