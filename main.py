@@ -2,10 +2,13 @@ import os
 import datetime
 import pytz
 import requests
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from bs4 import BeautifulSoup
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
+# 從環境變數讀取安全金鑰
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
@@ -42,6 +45,19 @@ KBO_TEAM_MAP = {
     "Kia": "起亞虎", "Hanwha": "韓華鷹", "Samsung": "三星獅"
 }
 
+# 1. 建立 Web Server 供 Render 通訊埠健康檢查（避免部署失敗）
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Baseball Bot is running on Render!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
+    server.serve_forever()
+
+# 2. 賽事抓取邏輯
 def get_mlb_games():
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
@@ -185,21 +201,24 @@ def build_full_report():
     kbo_msg = get_kbo_games()
     return f"☀️ **未來 24 小時棒球賽事彙整**\n\n{mlb_msg}\n\n--------------------\n\n{npb_msg}\n\n--------------------\n\n{kbo_msg}"
 
-# 處理 /schedule 指令
+# 3. 指令與定時處理
 async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     report = build_full_report()
     await update.message.reply_text(report, parse_mode="Markdown")
 
-# 定時自動推送任務
 async def scheduled_push(context: ContextTypes.DEFAULT_TYPE):
     if CHAT_ID:
         report = build_full_report()
         await context.bot.send_message(chat_id=CHAT_ID, text=report, parse_mode="Markdown")
 
+# 4. 主程式啟動
 def main():
     if not TELEGRAM_BOT_TOKEN:
         print("❌ 未設定 TELEGRAM_BOT_TOKEN")
         return
+
+    # 在背景啟動 Web Server 騙過 Render 通訊埠檢查
+    threading.Thread(target=run_web_server, daemon=True).start()
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
