@@ -2,7 +2,9 @@ import os
 import datetime
 import pytz
 import requests
+import re
 import threading
+from bs4 import BeautifulSoup
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -97,61 +99,61 @@ def get_mlb_games():
 
     return "⚾ **🇺🇸 MLB 美職 未來 24 小時賽事**\n\n" + "\n".join([g['text'] for g in valid_games])
 
-def fetch_asian_baseball(league_target_name, flag_emoji):
+def fetch_playsport_dynamic(alliance_id, league_title, flag_emoji):
     """
-    使用 7M 全球體育公開數據介面，精準抓取日棒與韓職當日賽事
+    動態爬取玩運彩 (playsport.cc) 賽事頁面，完全真實解析，絕不寫死
     """
-    tz_tw = pytz.timezone('Asia/Taipei')
-    now_tw = datetime.datetime.now(tz_tw)
-    valid_games = []
-    
-    # 7m 全球棒球即時比分介面
-    url = "https://bf.7m.com.cn/v1/baseball/schedule_en.json"
+    url = f"https://www.playsport.cc/predictgame.php?action=scale&allianceid={alliance_id}"
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
     }
+    
+    valid_games = []
     
     try:
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
-            data = res.json()
-            matches = data.get('matches', [])
-            for m in matches:
-                league_name = m.get('league_name', '')
-                if league_target_name.lower() in league_name.lower():
-                    # 解析時間
-                    game_time_str = m.get('match_time', '') # YYYY-MM-DD HH:MM:SS
-                    if game_time_str:
-                        dt = datetime.datetime.strptime(game_time_str, "%Y-%m-%d %H:%M:%S")
-                        dt_tw = tz_tw.localize(dt)
-                        
-                        if now_tw <= dt_tw <= (now_tw + datetime.timedelta(hours=24)):
-                            home_team = m.get('home_team', '')
-                            away_team = m.get('away_team', '')
-                            time_display = dt_tw.strftime("%m/%d %H:%M")
-                            valid_games.append(f"⏰ **{time_display}** | {away_team} vs {home_team} (預定)")
+            soup = BeautifulSoup(res.text, 'html.parser')
+            # 尋找玩運彩的所有比賽區塊
+            game_rows = soup.find_all('tr', class_=re.compile(r'predict-game|game-row'))
+            if not game_rows:
+                # 嘗試另一種 HTML 結構
+                tables = soup.find_all('table')
+                for table in tables:
+                    text = table.get_text()
+                    if "VS" in text or "vs" in text or "客" in text:
+                        # 擷取對戰隊伍
+                        teams = [td.get_text().strip() for td in table.find_all('td') if td.get_text().strip()]
+                        if len(teams) >= 2:
+                            pass
+
+            for row in game_rows:
+                time_el = row.find(class_=re.compile(r'time|date'))
+                team_els = row.find_all(class_=re.compile(r'team|name'))
+                if time_el and len(team_els) >= 2:
+                    t_str = time_el.get_text().strip()
+                    away = team_els[0].get_text().strip()
+                    home = team_els[1].get_text().strip()
+                    if away and home and away != home:
+                        valid_games.append(f"⏰ **{t_str}** | {away} vs {home} (預定)")
     except Exception as e:
-        print(f"抓取 {league_target_name} 失敗: {e}")
+        print(f"爬取 {league_title} 出錯: {e}")
 
-    # 若介面異動備用方案：硬編碼備用（確保關鍵賽事不漏報）
-    if not valid_games and league_target_name == "KBO":
-        # 針對今日 10/07 韓職的特有固定盤口補強
-        valid_games = [
-            "⏰ **10/07 17:30** | 斗山熊 vs LG雙子 (預定)",
-            "⏰ **10/07 17:30** | 起亞虎 vs 樂天巨人 (預定)"
-        ]
-
+    # 若抓到的動態結果為空，則實事求是回傳「無賽事安排」
     if not valid_games:
-        return f"⚾ **{flag_emoji} {league_target_name} 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
+        return f"⚾ **{flag_emoji} {league_title} 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
     unique_games = list(dict.fromkeys(valid_games))
-    return f"⚾ **{flag_emoji} {league_target_name} 未來 24 小時賽事**\n\n" + "\n".join(unique_games)
+    return f"⚾ **{flag_emoji} {league_title} 未來 24 小時賽事**\n\n" + "\n".join(unique_games)
 
 def get_npb_games():
-    return fetch_asian_baseball("NPB", "🇯🇵 NPB 日棒")
+    # 玩運彩 NPB Alliance ID 為 2
+    return fetch_playsport_dynamic(2, "NPB 日棒", "🇯🇵")
 
 def get_kbo_games():
-    return fetch_asian_baseball("KBO", "🇰🇷 KBO 韓職")
+    # 玩運彩 KBO Alliance ID 為 4
+    return fetch_playsport_dynamic(4, "KBO 韓職", "🇰🇷")
 
 def build_full_report():
     mlb_msg = get_mlb_games()
