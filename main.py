@@ -149,8 +149,7 @@ def get_npb_games():
         print(f"NPB Error: {e}")
 
     if not valid_games:
-        today_date = now_tw.strftime("%m/%d")
-        valid_games.append(f"⏰ **{today_date} 17:00** | 廣島鯉魚 vs 阪神虎 (預定)")
+        return "⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
     unique_games = list(dict.fromkeys(valid_games))
     return "⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n\n" + "\n".join(unique_games)
@@ -188,9 +187,7 @@ def get_kbo_games():
             pass
 
     if not valid_games:
-        today_date = now_tw.strftime("%m/%d")
-        valid_games.append(f"⏰ **{today_date} 17:30** | 斗山熊 vs LG雙子 (預定)")
-        valid_games.append(f"⏰ **{today_date} 17:30** | 起亞虎 vs 樂天巨人 (預定)")
+        return "⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
     unique_games = list(dict.fromkeys(valid_games))
     return "⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n\n" + "\n".join(unique_games)
