@@ -58,7 +58,7 @@ def run_web_server():
     server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
     server.serve_forever()
 
-# ----------------- 1. MLB 官方 API 實作 -----------------
+# ----------------- 1. MLB 官方 API -----------------
 def get_mlb_games():
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
@@ -117,7 +117,7 @@ def get_mlb_games():
     else:
         return "⚾ **🇺🇸 MLB 美職 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
-# ----------------- 2. NPB 萬用解析器（無畏網頁結構改版） -----------------
+# ----------------- 2. NPB 精準解析器 (完全切斷側邊欄與歷史賽事干擾) -----------------
 def get_npb_games():
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
@@ -125,7 +125,7 @@ def get_npb_games():
     
     url = f"https://baseball.yahoo.co.jp/npb/schedule/?date={date_str}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
         "Referer": "https://baseball.yahoo.co.jp/npb/"
     }
     
@@ -135,23 +135,28 @@ def get_npb_games():
             return f"⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n❌ 抓取失敗 (HTTP 狀態碼: {res.status_code})"
         
         soup = BeautifulSoup(res.text, 'html.parser')
+        
+        # 關鍵修復：強制限縮在 #main 核心內容區，排除 #sub 側邊欄與歷史戰績列表
+        main_content = soup.find('div', id='main') or soup.find('main') or soup
+        score_items = main_content.find_all('section', class_='bb-score__item')
+        
         valid_games = []
+        for item in score_items:
+            teams = item.find_all('p', class_='bb-score__team')
+            time_tag = item.find('p', class_='bb-score__link') or item.find('span', class_='bb-score__time')
+            
+            if len(teams) >= 2:
+                away_raw = teams[0].get_text(strip=True)
+                home_raw = teams[1].get_text(strip=True)
+                status_raw = time_tag.get_text(strip=True) if time_tag else "預定"
+                
+                away_zh = next((v for k, v in NPB_TEAM_MAP.items() if k in away_raw), None)
+                home_zh = next((v for k, v in NPB_TEAM_MAP.items() if k in home_raw), None)
+                
+                if away_zh and home_zh:
+                    valid_games.append(f"⏰ **{now_tw.strftime('%m/%d')}** | {away_zh} vs {home_zh} ({status_raw})")
 
-        # 掃描頁面中所有可能容納比賽卡片的 HTML 區塊
-        candidate_blocks = soup.find_all(['section', 'tr', 'div', 'li'])
-        for block in candidate_blocks:
-            text = block.get_text()
-            matched_teams = []
-            
-            for key_jp, team_zh in NPB_TEAM_MAP.items():
-                if key_jp in text and team_zh not in matched_teams:
-                    matched_teams.append(team_zh)
-            
-            # 如果同一個 HTML 區塊內剛好出現兩隊，即為一場對戰卡片
-            if len(matched_teams) == 2:
-                game_text = f"⏰ **{now_tw.strftime('%m/%d')}** | {matched_teams[0]} vs {matched_teams[1]}"
-                if game_text not in valid_games:
-                    valid_games.append(game_text)
+        valid_games = list(dict.fromkeys(valid_games))
 
         if valid_games:
             return "⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n\n" + "\n".join(valid_games)
@@ -161,27 +166,32 @@ def get_npb_games():
     except Exception as e:
         return f"⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n❌ 抓取失敗 (原因: {type(e).__name__})"
 
-# ----------------- 3. KBO 雙源自動備援（Daum 失敗自動切換 Naver） -----------------
+# ----------------- 3. KBO (防護突破標頭與動態請求) -----------------
 def get_kbo_games():
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
     date_str_daum = now_tw.strftime("%Y%m%d")
     date_str_naver = now_tw.strftime("%Y-%m-%d")
     
-    common_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    full_browser_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7,ko;q=0.6",
+        "Sec-Ch-Ua": '"Google Chrome";v="129", "Not=A?Brand";v="8", "Chromium";v="129"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-site"
     }
     
-    # 【主來源】Daum API
+    # 優先嘗試 Source 1: Daum API
     daum_url = f"https://sports.daum.net/prx/api/mda/schedule/kbo?date={date_str_daum}"
     try:
-        headers_daum = common_headers.copy()
+        headers_daum = full_browser_headers.copy()
         headers_daum["Referer"] = "https://sports.daum.net/schedule/kbo"
-        res_daum = requests.get(daum_url, headers=headers_daum, timeout=5)
+        res_daum = requests.get(daum_url, headers=headers_daum, timeout=6)
         
-        # 驗證是否為合法 JSON (防範 HTML 驗證頁阻擋)
         if res_daum.status_code == 200 and "html" not in res_daum.headers.get("Content-Type", "").lower() and not res_daum.text.strip().startswith("<"):
             data = res_daum.json()
             schedules = data.get('schedule', []) or data.get('data', [])
@@ -203,14 +213,14 @@ def get_kbo_games():
             if valid_games:
                 return "⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n\n" + "\n".join(valid_games)
     except Exception as e:
-        logging.warning(f"Daum API 抓取失敗: {e}，自動啟動 Naver 備援來源...")
+        logging.warning(f"Daum API 抓取失敗: {e}")
 
-    # 【備援來源】Naver API (當 Daum 被攔截或異常時無縫接管)
+    # 備援 Source 2: Naver API
     naver_url = f"https://m.sports.naver.com/api/game/kbaseball/schedule?date={date_str_naver}"
     try:
-        headers_naver = common_headers.copy()
+        headers_naver = full_browser_headers.copy()
         headers_naver["Referer"] = "https://m.sports.naver.com/kbaseball/schedule/index"
-        res_naver = requests.get(naver_url, headers=headers_naver, timeout=5)
+        res_naver = requests.get(naver_url, headers=headers_naver, timeout=6)
         
         if res_naver.status_code == 200 and not res_naver.text.strip().startswith("<"):
             data = res_naver.json()
@@ -237,7 +247,7 @@ def get_kbo_games():
 
     return "⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n未來 24 小時內無賽事安排或韓國伺服器維護中。"
 
-# ----------------- 4. 訊息彙整與 Telegram 機器人核心 -----------------
+# ----------------- 4. 訊息彙整與 Telegram Bot 核心 -----------------
 def build_full_report():
     mlb_msg = get_mlb_games()
     npb_msg = get_npb_games()
@@ -267,7 +277,6 @@ def main():
         logging.critical("❌ 未設定 TELEGRAM_BOT_TOKEN")
         return
 
-    # 啟動 Web Server 給 Render 進行 Health Check，防止服務休眠
     threading.Thread(target=run_web_server, daemon=True).start()
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
