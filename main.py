@@ -28,20 +28,6 @@ STATUS_MAP = {
     "Final": "完賽", "Game Over": "完賽", "Postponed": "延賽", "Cancelled": "取消"
 }
 
-NPB_TEAM_MAP = {
-    "Hanshin Tigers": "阪神虎", "Hiroshima Toyo Carp": "廣島鯉魚", "Yomiuri Giants": "讀賣巨人",
-    "Yokohama DeNA BayStars": "橫濱DeNA", "Tokyo Yakult Swallows": "養樂多燕子", "Chunichi Dragons": "中日龍",
-    "Fukuoka SoftBank Hawks": "軟體銀行鷹", "Hokkaido Nippon-Ham Fighters": "日本火腿鬥士",
-    "Chiba Lotte Marines": "羅德海洋", "Tohoku Rakuten Golden Eagles": "樂天金鷲",
-    "Orix Buffaloes": "歐力士猛牛", "Saitama Seibu Lions": "西武獅"
-}
-
-KBO_TEAM_MAP = {
-    "Doosan Bears": "斗山熊", "LG Twins": "LG雙子", "Kiwoom Heroes": "培證英雄",
-    "SSG Landers": "SSG登陸者", "KT Wiz": "KT巫師", "NC Dinos": "NC恐龍",
-    "Samsung Lions": "三星獅", "Lotte Giants": "樂天巨人", "KIA Tigers": "起亞虎", "Hanwha Eagles": "韓華鷹"
-}
-
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -111,48 +97,57 @@ def get_mlb_games():
 
     return "⚾ **🇺🇸 MLB 美職 未來 24 小時賽事**\n\n" + "\n".join([g['text'] for g in valid_games])
 
-def fetch_espn_league(league_code, league_title, flag_emoji, team_map):
+def fetch_taiwan_lottery_games(target_keyword, league_title, flag_emoji):
     """
-    通用動態 API 函數：直接從 ESPN 數據庫抓取全球賽事，有賽事就顯示，無賽事就回傳無賽事
+    直接調用台灣運彩 / 玩運彩開放賽事數據 API，精準獲取運彩有開盤的亞洲職棒賽事
     """
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
     valid_games = []
-    
-    # 抓取「當天」與「明天」兩個日期範圍，避免 UTC 與台灣時區差導致漏抓
-    dates_str = f"{now_tw.strftime('%Y%m%d')}-{(now_tw + datetime.timedelta(days=1)).strftime('%Y%m%d')}"
-    url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/{league_code}/scoreboard?dates={dates_str}"
-    
+
+    # 台灣運彩/運動彩券賽事數據入口 (Sportslottery API)
+    url = "https://sportapi.sportslottery.com.tw/api/v1/get-matches?sport_id=1"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+
     try:
-        res = requests.get(url, timeout=10)
+        res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
             data = res.json()
-            for event in data.get('events', []):
-                date_utc_str = event.get('date', '')
-                if date_utc_str:
-                    utc_dt = datetime.datetime.fromisoformat(date_utc_str.replace('Z', '+00:00'))
-                    tw_dt = utc_dt.astimezone(tz_tw)
-                    
-                    # 動態條件：只過濾台灣時間「現在」至「未來 24 小時內」的比賽
-                    if now_tw <= tw_dt <= (now_tw + datetime.timedelta(hours=24)):
-                        status_state = event.get('status', {}).get('type', {}).get('state', 'pre')
-                        status_zh = "預定" if status_state == "pre" else "進行中" if status_state == "in" else "完賽"
-                        
-                        competitors = event.get('competitions', [{}])[0].get('competitors', [])
-                        if len(competitors) >= 2:
-                            # ESPN 格式中，competitors[0] 為主隊, competitors[1] 為客隊
-                            home_raw = competitors[0].get('team', {}).get('displayName', '')
-                            away_raw = competitors[1].get('team', {}).get('displayName', '')
-                            
-                            home_zh = team_map.get(home_raw, home_raw)
-                            away_zh = team_map.get(away_raw, away_raw)
-                            
-                            time_display = tw_dt.strftime("%m/%d %H:%M")
-                            valid_games.append(f"⏰ **{time_display}** | {away_zh} vs {home_zh} ({status_zh})")
+            matches = data.get('matches', [])
+            for m in matches:
+                league_name = m.get('leagueName', '')
+                if target_keyword in league_name:
+                    # 抓取比賽時間
+                    start_time_ms = m.get('startTime', 0)
+                    if start_time_ms:
+                        dt_tw = datetime.datetime.fromtimestamp(start_time_ms / 1000, tz=tz_tw)
+                        if now_tw <= dt_tw <= (now_tw + datetime.timedelta(hours=24)):
+                            away_team = m.get('awayTeamName', '')
+                            home_team = m.get('homeTeamName', '')
+                            time_str = dt_tw.strftime("%m/%d %H:%M")
+                            valid_games.append(f"⏰ **{time_str}** | {away_team} vs {home_team} (預定)")
     except Exception as e:
-        print(f"抓取 {league_title} API 失敗: {e}")
+        print(f"台灣運彩 API 抓取失敗: {e}")
 
-    # 完全由 API 實況決定：沒有比賽就回傳無賽事
+    # 備用方案：若運彩 API 格式變化，使用備用極速開盤網頁 API
+    if not valid_games:
+        try:
+            backup_url = "https://m.playsport.cc/api/get_matches.php"
+            b_res = requests.get(backup_url, headers=headers, timeout=5)
+            if b_res.status_code == 200:
+                b_data = b_res.json()
+                for match in b_data.get('list', []):
+                    if target_keyword in match.get('league', ''):
+                        t_str = match.get('time', '')
+                        away = match.get('away', '')
+                        home = match.get('home', '')
+                        valid_games.append(f"⏰ **{t_str}** | {away} vs {home} (預定)")
+        except Exception:
+            pass
+
+    # 真實判斷：如果兩邊運彩 API 查詢都真的沒有賽事，才顯示無賽事
     if not valid_games:
         return f"⚾ **{flag_emoji} {league_title} 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
@@ -160,10 +155,10 @@ def fetch_espn_league(league_code, league_title, flag_emoji, team_map):
     return f"⚾ **{flag_emoji} {league_title} 未來 24 小時賽事**\n\n" + "\n".join(unique_games)
 
 def get_npb_games():
-    return fetch_espn_league("japan.1", "NPB 日棒", "🇯🇵", NPB_TEAM_MAP)
+    return fetch_taiwan_lottery_games("日本", "NPB 日棒", "🇯🇵")
 
 def get_kbo_games():
-    return fetch_espn_league("kor.1", "KBO 韓職", "🇰🇷", KBO_TEAM_MAP)
+    return fetch_taiwan_lottery_games("韓國", "KBO 韓職", "🇰🇷")
 
 def build_full_report():
     mlb_msg = get_mlb_games()
