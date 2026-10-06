@@ -106,7 +106,7 @@ def get_mlb_games():
                             })
             else:
                 error_occurred = True
-                error_msg = f"HTTP {res.status_code}"
+                error_msg = f"HTTP Status: {res.status_code}"
         except Exception as e:
             error_occurred = True
             error_msg = str(e)
@@ -120,60 +120,63 @@ def get_mlb_games():
     else:
         return "⚾ **🇺🇸 MLB 美職 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
-def fetch_espn_league(league_code, league_name, team_map):
-    """通用 ESPN / 備用 API 雙重抓取機制"""
+def fetch_sportsdb_league(league_id, league_name, team_map):
+    """TheSportsDB 賽事抓取：明確區分『無賽事』與『請求失敗』"""
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
-    date_str = now_tw.strftime('%Y%m%d')
+    date_str = now_tw.strftime('%Y-%m-%d')
     
-    # 帶上 dates 參數
-    url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/leagues/{league_code}/scoreboard?dates={date_str}"
-    headers = {"User-Agent": "Mozilla/5.0"}
+    url = f"https://www.thesportsdb.com/api/v1/json/3/eventsday.php?d={date_str}&l={league_id}"
     valid_games = []
     
     try:
-        res = requests.get(url, headers=headers, timeout=10)
-        if res.status_code == 200:
-            data = res.json()
-            events = data.get('events', [])
-            for ev in events:
-                date_utc = ev.get('date', '')
-                if date_utc:
-                    utc_dt = datetime.datetime.fromisoformat(date_utc.replace('Z', '+00:00'))
+        res = requests.get(url, timeout=10)
+        # 如果 HTTP 狀態碼不是 200，明確回傳失敗及狀態碼
+        if res.status_code != 200:
+            return f"⚾ **{league_name} 未來 24 小時賽事**\n❌ 抓取失敗 (HTTP Status: {res.status_code})"
+            
+        data = res.json()
+        events = data.get('events')
+        
+        # 狀態碼 200，但 events 為 None 或 []，代表真的無賽事
+        if not events:
+            return f"⚾ **{league_name} 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
+            
+        for ev in events:
+            event_time_utc = ev.get('strTime', '')
+            event_date = ev.get('strDate', '')
+            home_raw = ev.get('strHomeTeam', '')
+            away_raw = ev.get('strAwayTeam', '')
+            
+            if event_date and event_time_utc:
+                dt_str = f"{event_date}T{event_time_utc}Z"
+                try:
+                    utc_dt = datetime.datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
                     tw_dt = utc_dt.astimezone(tz_tw)
                     
                     if now_tw <= tw_dt <= (now_tw + datetime.timedelta(hours=24)):
-                        status_state = ev.get('status', {}).get('type', {}).get('state', 'pre')
-                        status_zh = "預定" if status_state == "pre" else "進行中" if status_state == "in" else "完賽"
-                        
-                        competitors = ev.get('competitions', [{}])[0].get('competitors', [])
-                        if len(competitors) >= 2:
-                            home_raw = competitors[0].get('team', {}).get('displayName', '')
-                            away_raw = competitors[1].get('team', {}).get('displayName', '')
-
-                            home_zh = team_map.get(home_raw, home_raw)
-                            away_zh = team_map.get(away_raw, away_raw)
-
-                            time_str = tw_dt.strftime("%H:%M")
-                            date_str_display = tw_dt.strftime("%m/%d")
-                            valid_games.append(f"⏰ **{date_str_display} {time_str}** | {away_zh} vs {home_zh} ({status_zh})")
-            
-            if valid_games:
-                unique_games = list(dict.fromkeys(valid_games))
-                return f"⚾ **{league_name} 未來 24 小時賽事**\n\n" + "\n".join(unique_games)
-            else:
-                return f"⚾ **{league_name} 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
+                        home_zh = team_map.get(home_raw, home_raw)
+                        away_zh = team_map.get(away_raw, away_raw)
+                        time_str = tw_dt.strftime("%H:%M")
+                        date_str_display = tw_dt.strftime("%m/%d")
+                        valid_games.append(f"⏰ **{date_str_display} {time_str}** | {away_zh} vs {home_zh}")
+                except Exception:
+                    continue
+        
+        if valid_games:
+            return f"⚾ **{league_name} 未來 24 小時賽事**\n\n" + "\n".join(valid_games)
         else:
-            # ESPN API 依然回傳 400 時的友善提示
             return f"⚾ **{league_name} 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
+            
     except Exception as e:
+        # 連線或程式例外異常，明確回傳失敗原因
         return f"⚾ **{league_name} 未來 24 小時賽事**\n❌ 抓取失敗 ({type(e).__name__}: {e})"
 
 def get_npb_games():
-    return fetch_espn_league("japan.1", "🇯🇵 NPB 日棒", NPB_TEAM_MAP)
+    return fetch_sportsdb_league("4424", "🇯🇵 NPB 日棒", NPB_TEAM_MAP)
 
 def get_kbo_games():
-    return fetch_espn_league("kor.1", "🇰🇷 KBO 韓職", KBO_TEAM_MAP)
+    return fetch_sportsdb_league("4425", "🇰🇷 KBO 韓職", KBO_TEAM_MAP)
 
 def build_full_report():
     mlb_msg = get_mlb_games()
