@@ -33,13 +33,14 @@ NPB_TEAM_MAP = {
     "Yokohama DeNA BayStars": "橫濱DeNA", "Tokyo Yakult Swallows": "養樂多燕子", "Chunichi Dragons": "中日龍",
     "Fukuoka SoftBank Hawks": "軟體銀行鷹", "Hokkaido Nippon-Ham Fighters": "日本火腿鬥士",
     "Chiba Lotte Marines": "羅德海洋", "Tohoku Rakuten Golden Eagles": "樂天金鷲",
-    "Orix Buffaloes": "歐力士猛牛", "Saitama Seibu Lions": "西武獅"
+    "Orix Buffaloes": "歐力士猛牛", "Saitama Seibu Lions": "西武獅", "Hiroshima": "廣島鯉魚", "Hanshin": "阪神虎"
 }
 
 KBO_TEAM_MAP = {
     "Doosan Bears": "斗山熊", "LG Twins": "LG雙子", "Kiwoom Heroes": "培證英雄",
     "SSG Landers": "SSG登陸者", "KT Wiz": "KT巫師", "NC Dinos": "NC恐龍",
-    "Samsung Lions": "三星獅", "Lotte Giants": "樂天巨人", "KIA Tigers": "起亞虎", "Hanwha Eagles": "韓華鷹"
+    "Samsung Lions": "三星獅", "Lotte Giants": "樂天巨人", "KIA Tigers": "起亞虎", "Hanwha Eagles": "韓華鷹",
+    "Doosan": "斗山熊", "LG": "LG雙子", "KIA": "起亞虎", "Lotte": "樂天巨人", "Hanwha": "韓華鷹", "Kiwoom": "培證英雄", "Samsung": "三星獅", "KT": "KT巫師", "NC": "NC恐龍", "SSG": "SSG登陸者"
 }
 
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -116,75 +117,86 @@ def get_mlb_games():
 
     return "⚾ **🇺🇸 MLB 美職 未來 24 小時賽事**\n\n" + "\n".join([g['text'] for g in valid_games])
 
-def fetch_asian_league(league_code, league_title, flag_emoji, team_map):
+def fetch_global_asian_games(league_code, league_title, flag_emoji, team_map):
+    """
+    採用無地區 IP 限制的全球 CDN API 端點，自動備援抓取
+    """
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
     valid_games = []
-    fetch_success = False
+    success_connection = False
 
-    # 來源 1: ESPN Scoreboard API
-    url_espn = f"https://site.api.espn.com/apis/site/v2/sports/baseball/{league_code}/scoreboard"
-    try:
-        res = requests.get(url_espn, timeout=8)
-        if res.status_code == 200:
-            fetch_success = True
-            data = res.json()
-            for event in data.get('events', []):
-                date_utc_str = event.get('date', '')
-                if date_utc_str:
-                    utc_dt = datetime.datetime.fromisoformat(date_utc_str.replace('Z', '+00:00'))
-                    tw_dt = utc_dt.astimezone(tz_tw)
-
-                    if now_tw <= tw_dt <= (now_tw + datetime.timedelta(hours=24)):
-                        status_state = event.get('status', {}).get('type', {}).get('state', 'pre')
-                        status_zh = "預定" if status_state == "pre" else "進行中" if status_state == "in" else "完賽"
-
-                        competitors = event.get('competitions', [{}])[0].get('competitors', [])
-                        if len(competitors) >= 2:
-                            home_raw = competitors[0].get('team', {}).get('displayName', '')
-                            away_raw = competitors[1].get('team', {}).get('displayName', '')
-
-                            home_zh = team_map.get(home_raw, home_raw)
-                            away_zh = team_map.get(away_raw, away_raw)
-
-                            time_display = tw_dt.strftime("%m/%d %H:%M")
-                            valid_games.append(f"⏰ **{time_display}** | {away_zh} vs {home_zh} ({status_zh})")
-    except Exception:
-        pass
-
-    # 來源 2: 玩運彩即時 API (備援)
-    if not valid_games:
-        alliance_id = 2 if "NPB" in league_title else 4
-        url_playsport = f"https://www.playsport.cc/api/predictgame.php?action=scale&allianceid={alliance_id}"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    # 1. 嘗試 ESPN 全球 API 端點 (加強跨日查詢)
+    for day_offset in [0, 1]:
+        target_date = (now_tw + datetime.timedelta(days=day_offset)).strftime("%Y%m%d")
+        url_espn = f"https://site.api.espn.com/apis/site/v2/sports/baseball/{league_code}/scoreboard?dates={target_date}"
         try:
-            p_res = requests.get(url_playsport, headers=headers, timeout=8)
-            if p_res.status_code == 200:
-                fetch_success = True
-                p_data = p_res.json()
-                games = p_data.get('games', []) or p_data.get('data', [])
-                for g in games:
-                    start_time = g.get('start_time', '') or g.get('time', '')
-                    away = g.get('away_name', '') or g.get('away', '')
-                    home = g.get('home_name', '') or g.get('home', '')
-                    if away and home:
-                        valid_games.append(f"⏰ **{start_time}** | {away} vs {home} (預定)")
+            res = requests.get(url_espn, timeout=5)
+            if res.status_code == 200:
+                success_connection = True
+                data = res.json()
+                for event in data.get('events', []):
+                    date_utc_str = event.get('date', '')
+                    if date_utc_str:
+                        utc_dt = datetime.datetime.fromisoformat(date_utc_str.replace('Z', '+00:00'))
+                        tw_dt = utc_dt.astimezone(tz_tw)
+
+                        if now_tw <= tw_dt <= (now_tw + datetime.timedelta(hours=24)):
+                            status_state = event.get('status', {}).get('type', {}).get('state', 'pre')
+                            status_zh = "預定" if status_state == "pre" else "進行中" if status_state == "in" else "完賽"
+
+                            competitors = event.get('competitions', [{}])[0].get('competitors', [])
+                            if len(competitors) >= 2:
+                                home_raw = competitors[0].get('team', {}).get('displayName', '')
+                                away_raw = competitors[1].get('team', {}).get('displayName', '')
+
+                                home_zh = team_map.get(home_raw, home_raw)
+                                away_zh = team_map.get(away_raw, away_raw)
+
+                                time_display = tw_dt.strftime("%m/%d %H:%M")
+                                valid_games.append(f"⏰ **{time_display}** | {away_zh} vs {home_zh} ({status_zh})")
+        except Exception:
+            pass
+
+    # 2. 備援來源： TheSportsDB 全球免費開放 API
+    if not valid_games:
+        league_id = "4428" if "NPB" in league_title else "4429"  # NPB: 4428, KBO: 4429
+        url_tsdb = f"https://www.thesportsdb.com/api/v1/json/3/eventsnextleague.php?id={league_id}"
+        try:
+            res = requests.get(url_tsdb, timeout=5)
+            if res.status_code == 200:
+                success_connection = True
+                data = res.json()
+                events = data.get('events', []) or []
+                for event in events:
+                    date_str = event.get('dateEvent', '')
+                    time_str = event.get('strTime', '00:00:00')
+                    if date_str:
+                        utc_dt = datetime.datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=pytz.utc)
+                        tw_dt = utc_dt.astimezone(tz_tw)
+                        if now_tw <= tw_dt <= (now_tw + datetime.timedelta(hours=24)):
+                            home = event.get('strHomeTeam', '')
+                            away = event.get('strAwayTeam', '')
+                            home_zh = team_map.get(home, home)
+                            away_zh = team_map.get(away, away)
+                            time_display = tw_dt.strftime("%m/%d %H:%M")
+                            valid_games.append(f"⏰ **{time_display}** | {away_zh} vs {home_zh} (預定)")
         except Exception:
             pass
 
     if not valid_games:
-        if not fetch_success:
-            return f"⚾ **{flag_emoji} {league_title} 未來 24 小時賽事**\n❌ 資料抓取失敗（API 請求逾時或被阻擋）"
+        if not success_connection:
+            return f"⚾ **{flag_emoji} {league_title} 未來 24 小時賽事**\n❌ 資料抓取失敗（連線逾時）"
         return f"⚾ **{flag_emoji} {league_title} 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
     unique_games = list(dict.fromkeys(valid_games))
     return f"⚾ **{flag_emoji} {league_title} 未來 24 小時賽事**\n\n" + "\n".join(unique_games)
 
 def get_npb_games():
-    return fetch_asian_league("japan.1", "NPB 日棒", "🇯🇵", NPB_TEAM_MAP)
+    return fetch_global_asian_games("japan.1", "NPB 日棒", "🇯🇵", NPB_TEAM_MAP)
 
 def get_kbo_games():
-    return fetch_asian_league("kor.1", "KBO 韓職", "🇰🇷", KBO_TEAM_MAP)
+    return fetch_global_asian_games("kor.1", "KBO 韓職", "🇰🇷", KBO_TEAM_MAP)
 
 def build_full_report():
     mlb_msg = get_mlb_games()
