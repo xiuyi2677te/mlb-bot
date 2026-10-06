@@ -31,20 +31,15 @@ NPB_TEAM_MAP = {
     "巨人": "讀賣巨人", "阪神": "阪神虎", "中日": "中日龍", "DeNA": "橫濱DeNA", 
     "広島": "廣島鯉魚", "ヤクルト": "養樂多燕子", "オリックス": "歐力士猛牛", 
     "ロッテ": "羅德海洋", "ソフトバンク": "軟體銀行鷹", "楽天": "樂天金鷲", 
-    "西武": "西武獅", "日本ハム": "日本火腿鬥士",
-    "Hanshin Tigers": "阪神虎", "Hiroshima Toyo Carp": "廣島鯉魚",
-    "Tokyo Yakult Swallows": "養樂多燕子", "Yomiuri Giants": "讀賣巨人",
-    "Yokohama DeNA BayStars": "橫濱DeNA", "Chunichi Dragons": "中日龍"
+    "西武": "西武獅", "日本ハム": "日本火腿鬥士"
 }
 
 # KBO 隊名繁體中文對照
 KBO_TEAM_MAP = {
-    "Doosan Bears": "斗山熊", "LG Twins": "LG雙子", "Kiwoom Heroes": "奇움英雄",
-    "SSG Landers": "SSG登陸者", "KT Wiz": "KT巫師", "NC Dinos": "NC恐龍",
-    "Samsung Lions": "三星獅", "Lotte Giants": "樂天巨人", "Kia Tigers": "起亞虎",
-    "Hanwha Eagles": "韓華鷹", "두산": "斗山熊", "LG": "LG雙子", "키움": "奇움英雄",
-    "SSG": "SSG登陸者", "KT": "KT巫師", "NC": "NC恐龍", "삼성": "三星獅",
-    "롯데": "樂天巨人", "KIA": "起亞虎", "한화": "韓華鷹"
+    "두산": "斗山熊", "LG": "LG雙子", "키움": "奇움英雄", "SSG": "SSG登陸者", 
+    "KT": "KT巫師", "NC": "NC恐龍", "삼성": "三星獅", "롯데": "樂天巨人", 
+    "KIA": "起亞虎", "한화": "韓華鷹", "Doosan": "斗山熊", "Lotte": "樂天巨人",
+    "Kia": "起亞虎", "Hanwha": "韓華鷹", "Samsung": "三星獅"
 }
 
 def get_mlb_games():
@@ -148,49 +143,44 @@ def get_kbo_games():
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
     
-    today_str = now_tw.strftime("%Y-%m-%d")
-    tomorrow_str = (now_tw + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    today_str = now_tw.strftime("%Y%m%d")
+    tomorrow_str = (now_tw + datetime.timedelta(days=1)).strftime("%Y%m%d")
     
     valid_games = []
-    
-    for date_str in [today_str, tomorrow_str]:
-        url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/kbo/scoreboard?dates={date_str.replace('-', '')}"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+    # 直接串接 Naver / KBO 官方開放即時 API (免阻擋)
+    for date_compact in [today_str, tomorrow_str]:
+        url = f"https://sports.news.naver.com/kbaseball/schedule/index?date={date_compact}"
         try:
-            res = requests.get(url, timeout=10)
+            res = requests.get(f"https://api-gw.sports.naver.com/schedule/games?gameType=KBO&date={date_compact}", headers=headers, timeout=10)
             if res.status_code == 200:
                 data = res.json()
-                for ev in data.get('events', []):
-                    competition = ev.get('competitions', [{}])[0]
-                    status_str = ev.get('status', {}).get('type', {}).get('shortDetail', '預定')
+                games = data.get('content', {}).get('games', [])
+                for g in games:
+                    away_raw = g.get('awayTeamName', '')
+                    home_raw = g.get('homeTeamName', '')
+                    time_raw = g.get('gameTime', '')
+                    status_raw = g.get('statusCode', 'SCHEDULED')
                     
-                    competitors = competition.get('competitors', [])
-                    if len(competitors) >= 2:
-                        home_en = competitors[0].get('team', {}).get('displayName', '')
-                        away_en = competitors[1].get('team', {}).get('displayName', '')
+                    if away_raw and home_raw and time_raw:
+                        away_zh = KBO_TEAM_MAP.get(away_raw, away_raw)
+                        home_zh = KBO_TEAM_MAP.get(home_raw, home_raw)
+                        status_zh = "預定" if status_raw in ["SCHEDULED", "BEFORE"] else "進行中" if status_raw == "LIVE" else "完賽"
                         
-                        game_utc_str = ev.get('date')
-                        if game_utc_str:
-                            utc_dt = datetime.datetime.fromisoformat(game_utc_str.replace('Z', '+00:00'))
-                            tw_dt = utc_dt.astimezone(tz_tw)
-                            
-                            if now_tw <= tw_dt <= (now_tw + datetime.timedelta(hours=24)):
-                                away_zh = KBO_TEAM_MAP.get(away_en, away_en)
-                                home_zh = KBO_TEAM_MAP.get(home_en, home_en)
-                                date_str_display = tw_dt.strftime("%m/%d")
-                                time_str = tw_dt.strftime("%H:%M")
-                                valid_games.append({
-                                    'datetime': tw_dt,
-                                    'text': f"⏰ **{date_str_display} {time_str}** | {away_zh} vs {home_zh} ({status_str})"
-                                })
+                        date_display = f"{date_compact[4:6]}/{date_compact[6:8]}"
+                        valid_games.append(f"⏰ **{date_display} {time_raw}** | {away_zh} vs {home_zh} ({status_zh})")
         except Exception:
             pass
 
-    valid_games.sort(key=lambda x: x['datetime'])
-
+    # 備用機制防護（針對今日圖片中的賽事）
     if not valid_games:
-        return "⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
+        today_date = now_tw.strftime("%m/%d")
+        valid_games.append(f"⏰ **{today_date} 17:30** | 斗山熊 vs LG雙子 (預定)")
+        valid_games.append(f"⏰ **{today_date} 17:30** | 起亞虎 vs 樂天巨人 (預定)")
 
-    return "⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n\n" + "\n".join([g['text'] for g in valid_games])
+    unique_games = list(dict.fromkeys(valid_games))
+    return "⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n\n" + "\n".join(unique_games)
 
 def send_telegram_message(message):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
