@@ -10,11 +10,14 @@ def get_playsport_games_next_24h(alliance_id, league_name):
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
     
+    # 核心修復：一次抓「昨天、今天、明天」三天，徹底解決玩運彩半夜換日的 API 歸類盲點
+    yesterday = (now_tw - datetime.timedelta(days=1)).date()
     today = now_tw.date()
-    tomorrow = today + datetime.timedelta(days=1)
+    tomorrow = (now_tw + datetime.timedelta(days=1)).date()
     
-    target_dates = [today, tomorrow]
+    target_dates = [yesterday, today, tomorrow]
     valid_games = []
+    seen_games = set()  # 用來避免重複抓取
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -44,17 +47,22 @@ def get_playsport_games_next_24h(alliance_id, league_name):
                         h, m = map(int, time_str.split(':'))
                         game_datetime = tz_tw.localize(datetime.datetime(d.year, d.month, d.day, h, m))
                         
+                        # 過濾條件：開打時間在「發布當下 ~ 未來 24 小時內」
                         if now_tw <= game_datetime <= (now_tw + datetime.timedelta(hours=24)):
-                            date_label = game_datetime.strftime("%m/%d")
-                            valid_games.append({
-                                'datetime': game_datetime,
-                                'text': f"⏰ **{date_label} {time_str}** | {away} vs {home} ({status})"
-                            })
+                            game_key = f"{game_datetime.strftime('%Y%m%d%H%m')}_{away}_{home}"
+                            if game_key not in seen_games:
+                                seen_games.add(game_key)
+                                date_label = game_datetime.strftime("%m/%d")
+                                valid_games.append({
+                                    'datetime': game_datetime,
+                                    'text': f"⏰ **{date_label} {time_str}** | {away} vs {home} ({status})"
+                                })
                     except Exception:
                         continue
         except Exception:
             pass
             
+    # 按照開打時間由近到遠排序
     valid_games.sort(key=lambda x: x['datetime'])
     
     if not valid_games:
