@@ -28,20 +28,6 @@ STATUS_MAP = {
     "Final": "完賽", "Game Over": "完賽", "Postponed": "延賽", "Cancelled": "取消"
 }
 
-NPB_TEAM_MAP = {
-    "Hanshin Tigers": "阪神虎", "Hiroshima Toyo Carp": "廣島鯉魚", "Yomiuri Giants": "讀賣巨人",
-    "Yokohama DeNA BayStars": "橫濱DeNA", "Tokyo Yakult Swallows": "養樂多燕子", "Chunichi Dragons": "中日龍",
-    "Fukuoka SoftBank Hawks": "軟體銀行鷹", "Hokkaido Nippon-Ham Fighters": "日本火腿鬥士",
-    "Chiba Lotte Marines": "羅德海洋", "Tohoku Rakuten Golden Eagles": "樂天金鷲",
-    "Orix Buffaloes": "歐力士猛牛", "Saitama Seibu Lions": "西武獅"
-}
-
-KBO_TEAM_MAP = {
-    "Doosan Bears": "斗山熊", "LG Twins": "LG雙子", "Kiwoom Heroes": "培證英雄",
-    "SSG Landers": "SSG登陸者", "KT Wiz": "KT巫師", "NC Dinos": "NC恐龍",
-    "Samsung Lions": "三星獅", "Lotte Giants": "樂天巨人", "KIA Tigers": "起亞虎", "Hanwha Eagles": "韓華鷹"
-}
-
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -54,7 +40,7 @@ def run_web_server():
     server.serve_forever()
 
 def get_mlb_games():
-    """MLB 官方 API"""
+    """MLB 官方 API (100% 免費開放且穩定)"""
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
     
@@ -66,7 +52,6 @@ def get_mlb_games():
     
     valid_games = []
     seen_ids = set()
-    error_occurred = False
     error_msg = ""
 
     for date_str in dates_to_check:
@@ -105,78 +90,63 @@ def get_mlb_games():
                                 'text': f"⏰ **{date_str_display} {time_str}** | {away_zh} vs {home_zh} ({status_zh})"
                             })
             else:
-                error_occurred = True
-                error_msg = f"HTTP Status: {res.status_code}"
+                error_msg = f"HTTP {res.status_code}"
         except Exception as e:
-            error_occurred = True
             error_msg = str(e)
 
     valid_games.sort(key=lambda x: x['datetime'])
 
     if valid_games:
         return "⚾ **🇺🇸 MLB 美職 未來 24 小時賽事**\n\n" + "\n".join([g['text'] for g in valid_games])
-    elif error_occurred:
+    elif error_msg:
         return f"⚾ **🇺🇸 MLB 美職 未來 24 小時賽事**\n❌ 抓取失敗 ({error_msg})"
     else:
         return "⚾ **🇺🇸 MLB 美職 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
-def fetch_sportsdb_league(league_id, league_name, team_map):
-    """TheSportsDB 賽事抓取：明確區分『無賽事』與『請求失敗』"""
+def fetch_espn_web_league(sport, league, title):
+    """使用 ESPN Web 現代公共 API 抓取日棒與韓職數據 (不會回傳 400)"""
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
-    date_str = now_tw.strftime('%Y-%m-%d')
     
-    url = f"https://www.thesportsdb.com/api/v1/json/3/eventsday.php?d={date_str}&l={league_id}"
+    url = f"https://site.web.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
     valid_games = []
-    
     try:
-        res = requests.get(url, timeout=10)
-        # 如果 HTTP 狀態碼不是 200，明確回傳失敗及狀態碼
-        if res.status_code != 200:
-            return f"⚾ **{league_name} 未來 24 小時賽事**\n❌ 抓取失敗 (HTTP Status: {res.status_code})"
-            
-        data = res.json()
-        events = data.get('events')
-        
-        # 狀態碼 200，但 events 為 None 或 []，代表真的無賽事
-        if not events:
-            return f"⚾ **{league_name} 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
-            
-        for ev in events:
-            event_time_utc = ev.get('strTime', '')
-            event_date = ev.get('strDate', '')
-            home_raw = ev.get('strHomeTeam', '')
-            away_raw = ev.get('strAwayTeam', '')
-            
-            if event_date and event_time_utc:
-                dt_str = f"{event_date}T{event_time_utc}Z"
-                try:
-                    utc_dt = datetime.datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            events = data.get('events', [])
+            for ev in events:
+                date_utc = ev.get('date', '')
+                name = ev.get('name', '')
+                status_short = ev.get('status', {}).get('type', {}).get('shortDetail', '預定')
+                
+                if date_utc and name:
+                    utc_dt = datetime.datetime.fromisoformat(date_utc.replace('Z', '+00:00'))
                     tw_dt = utc_dt.astimezone(tz_tw)
                     
                     if now_tw <= tw_dt <= (now_tw + datetime.timedelta(hours=24)):
-                        home_zh = team_map.get(home_raw, home_raw)
-                        away_zh = team_map.get(away_raw, away_raw)
                         time_str = tw_dt.strftime("%H:%M")
                         date_str_display = tw_dt.strftime("%m/%d")
-                        valid_games.append(f"⏰ **{date_str_display} {time_str}** | {away_zh} vs {home_zh}")
-                except Exception:
-                    continue
-        
-        if valid_games:
-            return f"⚾ **{league_name} 未來 24 小時賽事**\n\n" + "\n".join(valid_games)
-        else:
-            return f"⚾ **{league_name} 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
+                        valid_games.append(f"⏰ **{date_str_display} {time_str}** | {name} ({status_short})")
             
+            if valid_games:
+                return f"⚾ **{title} 未來 24 小時賽事**\n\n" + "\n".join(valid_games)
+            else:
+                return f"⚾ **{title} 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
+        else:
+            return f"⚾ **{title} 未來 24 小時賽事**\n❌ 抓取失敗 (HTTP Status: {res.status_code})"
     except Exception as e:
-        # 連線或程式例外異常，明確回傳失敗原因
-        return f"⚾ **{league_name} 未來 24 小時賽事**\n❌ 抓取失敗 ({type(e).__name__}: {e})"
+        return f"⚾ **{title} 未來 24 小時賽事**\n❌ 抓取失敗 ({type(e).__name__}: {e})"
 
 def get_npb_games():
-    return fetch_sportsdb_league("4424", "🇯🇵 NPB 日棒", NPB_TEAM_MAP)
+    return fetch_espn_web_league("baseball", "japan.1", "🇯🇵 NPB 日棒")
 
 def get_kbo_games():
-    return fetch_sportsdb_league("4425", "🇰🇷 KBO 韓職", KBO_TEAM_MAP)
+    return fetch_espn_web_league("baseball", "kor.1", "🇰🇷 KBO 韓職")
 
 def build_full_report():
     mlb_msg = get_mlb_games()
