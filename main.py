@@ -121,35 +121,34 @@ def get_npb_games():
     now_tw = datetime.datetime.now(tz_tw)
     valid_games = []
     
-    # 採用多伺服器 CDN 數據源，避免跨國抓取被封鎖
-    today_str = now_tw.strftime("%Y-%m-%d")
-    url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/npb/scoreboard?dates={now_tw.strftime('%Y%m%d')}"
+    today_str = now_tw.strftime("%Y%m%d")
+    tomorrow_str = (now_tw + datetime.timedelta(days=1)).strftime("%Y%m%d")
+    url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/japan.1/scoreboard?dates={today_str}-{tomorrow_str}"
     
     try:
         res = requests.get(url, timeout=10)
         if res.status_code == 200:
             data = res.json()
             for event in data.get('events', []):
-                status_state = event.get('status', {}).get('type', {}).get('state', 'pre')
-                status_zh = "預定" if status_state == "pre" else "進行中" if status_state == "in" else "完賽"
-                
                 date_utc_str = event.get('date', '')
                 if date_utc_str:
                     utc_dt = datetime.datetime.fromisoformat(date_utc_str.replace('Z', '+00:00'))
                     tw_dt = utc_dt.astimezone(tz_tw)
-                    time_display = tw_dt.strftime("%m/%d %H:%M")
-                else:
-                    time_display = now_tw.strftime("%m/%d 17:00")
                     
-                competitors = event.get('competitions', [{}])[0].get('competitors', [])
-                if len(competitors) >= 2:
-                    home_team_en = competitors[0].get('team', {}).get('displayName', '')
-                    away_team_en = competitors[1].get('team', {}).get('displayName', '')
-                    
-                    home_zh = NPB_TEAM_MAP.get(home_team_en, home_team_en)
-                    away_zh = NPB_TEAM_MAP.get(away_team_en, away_team_en)
-                    
-                    valid_games.append(f"⏰ **{time_display}** | {away_zh} vs {home_zh} ({status_zh})")
+                    if now_tw <= tw_dt <= (now_tw + datetime.timedelta(hours=24)):
+                        status_state = event.get('status', {}).get('type', {}).get('state', 'pre')
+                        status_zh = "預定" if status_state == "pre" else "進行中" if status_state == "in" else "完賽"
+                        
+                        competitors = event.get('competitions', [{}])[0].get('competitors', [])
+                        if len(competitors) >= 2:
+                            home_team_en = competitors[0].get('team', {}).get('displayName', '')
+                            away_team_en = competitors[1].get('team', {}).get('displayName', '')
+                            
+                            home_zh = NPB_TEAM_MAP.get(home_team_en, home_team_en)
+                            away_zh = NPB_TEAM_MAP.get(away_team_en, away_team_en)
+                            
+                            time_display = tw_dt.strftime("%m/%d %H:%M")
+                            valid_games.append(f"⏰ **{time_display}** | {away_zh} vs {home_zh} ({status_zh})")
     except Exception as e:
         print(f"NPB 數據讀取失敗: {e}")
 
@@ -164,34 +163,34 @@ def get_kbo_games():
     now_tw = datetime.datetime.now(tz_tw)
     valid_games = []
     
-    # 採用全球 API 節點，解決 Render 美國 IP 被 Naver 阻擋問題
-    url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/kbo/scoreboard?dates={now_tw.strftime('%Y%m%d')}"
+    today_str = now_tw.strftime("%Y%m%d")
+    tomorrow_str = (now_tw + datetime.timedelta(days=1)).strftime("%Y%m%d")
+    url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/kor.1/scoreboard?dates={today_str}-{tomorrow_str}"
     
     try:
         res = requests.get(url, timeout=10)
         if res.status_code == 200:
             data = res.json()
             for event in data.get('events', []):
-                status_state = event.get('status', {}).get('type', {}).get('state', 'pre')
-                status_zh = "預定" if status_state == "pre" else "進行中" if status_state == "in" else "完賽"
-                
                 date_utc_str = event.get('date', '')
                 if date_utc_str:
                     utc_dt = datetime.datetime.fromisoformat(date_utc_str.replace('Z', '+00:00'))
                     tw_dt = utc_dt.astimezone(tz_tw)
-                    time_display = tw_dt.strftime("%m/%d %H:%M")
-                else:
-                    time_display = now_tw.strftime("%m/%d 17:30")
                     
-                competitors = event.get('competitions', [{}])[0].get('competitors', [])
-                if len(competitors) >= 2:
-                    home_team_en = competitors[0].get('team', {}).get('displayName', '')
-                    away_team_en = competitors[1].get('team', {}).get('displayName', '')
-                    
-                    home_zh = KBO_TEAM_MAP.get(home_team_en, home_team_en)
-                    away_zh = KBO_TEAM_MAP.get(away_team_en, away_team_en)
-                    
-                    valid_games.append(f"⏰ **{time_display}** | {away_zh} vs {home_zh} ({status_zh})")
+                    if now_tw <= tw_dt <= (now_tw + datetime.timedelta(hours=24)):
+                        status_state = event.get('status', {}).get('type', {}).get('state', 'pre')
+                        status_zh = "預定" if status_state == "pre" else "進行中" if status_state == "in" else "完賽"
+                        
+                        competitors = event.get('competitions', [{}])[0].get('competitors', [])
+                        if len(competitors) >= 2:
+                            home_team_en = competitors[0].get('team', {}).get('displayName', '')
+                            away_team_en = competitors[1].get('team', {}).get('displayName', '')
+                            
+                            home_zh = KBO_TEAM_MAP.get(home_team_en, home_team_en)
+                            away_zh = KBO_TEAM_MAP.get(away_team_en, away_team_en)
+                            
+                            time_display = tw_dt.strftime("%m/%d %H:%M")
+                            valid_games.append(f"⏰ **{time_display}** | {away_zh} vs {home_zh} ({status_zh})")
     except Exception as e:
         print(f"KBO 數據讀取失敗: {e}")
 
