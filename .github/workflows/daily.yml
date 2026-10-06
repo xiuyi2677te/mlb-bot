@@ -2,11 +2,9 @@ name: Daily Baseball Bot
 
 on:
   schedule:
-    # 台灣時間 早上 10:00 (UTC 02:00)
-    - cron: '0 2 * * *'
-    # 台灣時間 下午 19:00 (UTC 11:00)
-    - cron: '0 11 * * *'
-  # 保留手動按鈕觸發
+    # 每 3 小時執行一次 (對應台灣時間 0, 3, 6, 9, 12, 15, 18, 21 點)
+    - cron: '0 */3 * * *'
+  # 保留手動觸發按鈕
   workflow_dispatch:
 
 jobs:
