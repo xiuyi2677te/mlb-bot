@@ -106,12 +106,13 @@ def get_mlb_games():
     else:
         return "⚾ **🇺🇸 MLB 美職 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
-def get_npb_games():
-    """NPB 日棒 API"""
+def fetch_espn_league(league_code, league_name):
+    """通用 ESPN 聯賽抓取函式 (修復 URL 帶法)"""
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
     
-    url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/npb/scoreboard?dates={now_tw.strftime('%Y%m%d')}"
+    # 修正 API 帶法：leagues 參數帶 npb 或 kbo
+    url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/leagues/{league_code}/scoreboard?dates={now_tw.strftime('%Y%m%d')}"
     valid_games = []
     
     try:
@@ -130,45 +131,19 @@ def get_npb_games():
                     valid_games.append(f"⏰ **{tw_dt.strftime('%m/%d')} {time_str}** | {name} ({status})")
             
             if valid_games:
-                return "⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n\n" + "\n".join(valid_games)
+                return f"⚾ **{league_name} 未來 24 小時賽事**\n\n" + "\n".join(valid_games)
             else:
-                return "⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
+                return f"⚾ **{league_name} 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
         else:
-            return f"⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n❌ 抓取失敗 (HTTP Status: {res.status_code})"
+            return f"⚾ **{league_name} 未來 24 小時賽事**\n❌ 抓取失敗 (HTTP Status: {res.status_code})"
     except Exception as e:
-        return f"⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n❌ 抓取失敗 ({type(e).__name__}: {e})"
+        return f"⚾ **{league_name} 未來 24 小時賽事**\n❌ 抓取失敗 ({type(e).__name__}: {e})"
+
+def get_npb_games():
+    return fetch_espn_league("npb", "🇯🇵 NPB 日棒")
 
 def get_kbo_games():
-    """KBO 韓職 API"""
-    tz_tw = pytz.timezone('Asia/Taipei')
-    now_tw = datetime.datetime.now(tz_tw)
-    
-    url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/kbo/scoreboard?dates={now_tw.strftime('%Y%m%d')}"
-    valid_games = []
-    
-    try:
-        res = requests.get(url, timeout=10)
-        if res.status_code == 200:
-            data = res.json()
-            events = data.get('events', [])
-            for ev in events:
-                name = ev.get('name', '')
-                status = ev.get('status', {}).get('type', {}).get('shortDetail', '預定')
-                date_utc = ev.get('date', '')
-                if date_utc:
-                    utc_dt = datetime.datetime.fromisoformat(date_utc.replace('Z', '+00:00'))
-                    tw_dt = utc_dt.astimezone(tz_tw)
-                    time_str = tw_dt.strftime("%H:%M")
-                    valid_games.append(f"⏰ **{tw_dt.strftime('%m/%d')} {time_str}** | {name} ({status})")
-            
-            if valid_games:
-                return "⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n\n" + "\n".join(valid_games)
-            else:
-                return "⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
-        else:
-            return f"⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n❌ 抓取失敗 (HTTP Status: {res.status_code})"
-    except Exception as e:
-        return f"⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n❌ 抓取失敗 ({type(e).__name__}: {e})"
+    return fetch_espn_league("kbo", "🇰🇷 KBO 韓職")
 
 def build_full_report():
     mlb_msg = get_mlb_games()
