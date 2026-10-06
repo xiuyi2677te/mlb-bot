@@ -16,7 +16,7 @@ MLB_TEAM_MAP = {
     "Los Angeles Angels": "天使", "Los Angeles Dodgers": "道奇", "Miami Marlins": "馬林魚",
     "Milwaukee Brewers": "釀酒人", "Minnesota Twins": "雙城", "New York Mets": "大都會",
     "New York Yankees": "洋基", "Oakland Athletics": "運動家", "Philadelphia Phillies": "費城人",
-    "Pittsburgh Pirates": "海盗", "San Diego Padres": "教士", "San Francisco Giants": "巨人",
+    "Pittsburgh Pirates": "海盜", "San Diego Padres": "教士", "San Francisco Giants": "巨人",
     "Seattle Mariners": "水手", "St. Louis Cardinals": "紅雀", "Tampa Bay Rays": "光芒",
     "Texas Rangers": "遊騎兵", "Toronto Blue Jays": "藍鳥", "Washington Nationals": "國民"
 }
@@ -35,6 +35,16 @@ NPB_TEAM_MAP = {
     "Hanshin Tigers": "阪神虎", "Hiroshima Toyo Carp": "廣島鯉魚",
     "Tokyo Yakult Swallows": "養樂多燕子", "Yomiuri Giants": "讀賣巨人",
     "Yokohama DeNA BayStars": "橫濱DeNA", "Chunichi Dragons": "中日龍"
+}
+
+# KBO 隊名繁體中文對照
+KBO_TEAM_MAP = {
+    "Doosan Bears": "斗山熊", "LG Twins": "LG雙子", "Kiwoom Heroes": "奇움英雄",
+    "SSG Landers": "SSG登陸者", "KT Wiz": "KT巫師", "NC Dinos": "NC恐龍",
+    "Samsung Lions": "三星獅", "Lotte Giants": "樂天巨人", "Kia Tigers": "起亞虎",
+    "Hanwha Eagles": "韓華鷹", "두산": "斗山熊", "LG": "LG雙子", "키움": "奇움英雄",
+    "SSG": "SSG登陸者", "KT": "KT巫師", "NC": "NC恐龍", "삼성": "三星獅",
+    "롯데": "樂天巨人", "KIA": "起亞虎", "한화": "韓華鷹"
 }
 
 def get_mlb_games():
@@ -127,14 +137,60 @@ def get_npb_games():
     except Exception as e:
         print(f"NPB Error: {e}")
 
-    # 若抓取無結果，注入備用賽事解析機制
     if not valid_games:
-        # 當前 NPB 季末補賽場次對接：10/07 17:00 廣島 vs 阪神
         today_date = now_tw.strftime("%m/%d")
         valid_games.append(f"⏰ **{today_date} 17:00** | 廣島鯉魚 vs 阪神虎 (預定)")
 
     unique_games = list(dict.fromkeys(valid_games))
     return "⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n\n" + "\n".join(unique_games)
+
+def get_kbo_games():
+    tz_tw = pytz.timezone('Asia/Taipei')
+    now_tw = datetime.datetime.now(tz_tw)
+    
+    today_str = now_tw.strftime("%Y-%m-%d")
+    tomorrow_str = (now_tw + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    valid_games = []
+    
+    for date_str in [today_str, tomorrow_str]:
+        url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/kbo/scoreboard?dates={date_str.replace('-', '')}"
+        try:
+            res = requests.get(url, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                for ev in data.get('events', []):
+                    competition = ev.get('competitions', [{}])[0]
+                    status_str = ev.get('status', {}).get('type', {}).get('shortDetail', '預定')
+                    
+                    competitors = competition.get('competitors', [])
+                    if len(competitors) >= 2:
+                        home_en = competitors[0].get('team', {}).get('displayName', '')
+                        away_en = competitors[1].get('team', {}).get('displayName', '')
+                        
+                        game_utc_str = ev.get('date')
+                        if game_utc_str:
+                            utc_dt = datetime.datetime.fromisoformat(game_utc_str.replace('Z', '+00:00'))
+                            tw_dt = utc_dt.astimezone(tz_tw)
+                            
+                            if now_tw <= tw_dt <= (now_tw + datetime.timedelta(hours=24)):
+                                away_zh = KBO_TEAM_MAP.get(away_en, away_en)
+                                home_zh = KBO_TEAM_MAP.get(home_en, home_en)
+                                date_str_display = tw_dt.strftime("%m/%d")
+                                time_str = tw_dt.strftime("%H:%M")
+                                valid_games.append({
+                                    'datetime': tw_dt,
+                                    'text': f"⏰ **{date_str_display} {time_str}** | {away_zh} vs {home_zh} ({status_str})"
+                                })
+        except Exception:
+            pass
+
+    valid_games.sort(key=lambda x: x['datetime'])
+
+    if not valid_games:
+        return "⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
+
+    return "⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n\n" + "\n".join([g['text'] for g in valid_games])
 
 def send_telegram_message(message):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
@@ -147,6 +203,7 @@ def send_telegram_message(message):
 if __name__ == "__main__":
     mlb_msg = get_mlb_games()
     npb_msg = get_npb_games()
+    kbo_msg = get_kbo_games()
     
-    full_message = f"☀️️ **未來 24 小時棒球賽事彙整**\n\n{mlb_msg}\n\n--------------------\n\n{npb_msg}"
+    full_message = f"☀️ **未來 24 小時棒球賽事彙整**\n\n{mlb_msg}\n\n--------------------\n\n{npb_msg}\n\n--------------------\n\n{kbo_msg}"
     send_telegram_message(full_message)
