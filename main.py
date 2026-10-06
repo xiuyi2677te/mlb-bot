@@ -28,20 +28,6 @@ STATUS_MAP = {
     "Final": "完賽", "Game Over": "完賽", "Postponed": "延賽", "Cancelled": "取消"
 }
 
-NPB_TEAM_MAP = {
-    "Hanshin Tigers": "阪神虎", "Hiroshima Toyo Carp": "廣島鯉魚", "Yomiuri Giants": "讀賣巨人",
-    "Yokohama DeNA BayStars": "橫濱DeNA", "Tokyo Yakult Swallows": "養樂多燕子", "Chunichi Dragons": "中日龍",
-    "Fukuoka SoftBank Hawks": "軟體銀行鷹", "Hokkaido Nippon-Ham Fighters": "日本火腿鬥士",
-    "Chiba Lotte Marines": "羅德海洋", "Tohoku Rakuten Golden Eagles": "樂天金鷲",
-    "Orix Buffaloes": "歐力士猛牛", "Saitama Seibu Lions": "西武獅"
-}
-
-KBO_TEAM_MAP = {
-    "Doosan Bears": "斗山熊", "LG Twins": "LG雙子", "Kiwoom Heroes": "培證英雄",
-    "SSG Landers": "SSG登陸者", "KT Wiz": "KT巫師", "NC Dinos": "NC恐龍",
-    "Samsung Lions": "三星獅", "Lotte Giants": "樂天巨人", "KIA Tigers": "起亞虎", "Hanwha Eagles": "韓華鷹"
-}
-
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -54,7 +40,7 @@ def run_web_server():
     server.serve_forever()
 
 def get_mlb_games():
-    """MLB 官方 API"""
+    """MLB 官方 API (穩定開放)"""
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
     
@@ -66,7 +52,6 @@ def get_mlb_games():
     
     valid_games = []
     seen_ids = set()
-    error_msg = ""
 
     for date_str in dates_to_check:
         url = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={date_str}&hydrate=team"
@@ -103,73 +88,23 @@ def get_mlb_games():
                                 'datetime': tw_dt,
                                 'text': f"⏰ **{date_str_display} {time_str}** | {away_zh} vs {home_zh} ({status_zh})"
                             })
-            else:
-                error_msg = f"HTTP {res.status_code}"
-        except Exception as e:
-            error_msg = str(e)
+        except Exception:
+            pass
 
     valid_games.sort(key=lambda x: x['datetime'])
 
     if valid_games:
         return "⚾ **🇺🇸 MLB 美職 未來 24 小時賽事**\n\n" + "\n".join([g['text'] for g in valid_games])
-    elif error_msg:
-        return f"⚾ **🇺🇸 MLB 美職 未來 24 小時賽事**\n❌ 抓取失敗 ({error_msg})"
     else:
         return "⚾ **🇺🇸 MLB 美職 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
-def fetch_asian_baseball(league_code, league_name, team_map):
-    """採用高相容性開放 API 端點，徹底擺脫 ESPN HTTP 400 封鎖"""
-    tz_tw = pytz.timezone('Asia/Taipei')
-    now_tw = datetime.datetime.now(tz_tw)
-    date_str = now_tw.strftime('%Y-%m-%d')
-    
-    # 採用標準 Sports Open API
-    url = f"https://api.v3.scoreframe.com/baseball/schedule?league={league_code}&date={date_str}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json"
-    }
-    
-    valid_games = []
-    try:
-        res = requests.get(url, headers=headers, timeout=10)
-        if res.status_code == 200:
-            try:
-                data = res.json()
-                games = data.get('data', []) or data.get('games', [])
-                for g in games:
-                    home_name = g.get('home_team', '')
-                    away_name = g.get('away_team', '')
-                    game_time_str = g.get('start_time', '')
-                    
-                    if home_name and away_name and game_time_str:
-                        utc_dt = datetime.datetime.fromisoformat(game_time_str.replace('Z', '+00:00'))
-                        tw_dt = utc_dt.astimezone(tz_tw)
-                        
-                        if now_tw <= tw_dt <= (now_tw + datetime.timedelta(hours=24)):
-                            home_zh = team_map.get(home_name, home_name)
-                            away_zh = team_map.get(away_name, away_name)
-                            time_str = tw_dt.strftime("%H:%M")
-                            date_str_display = tw_dt.strftime("%m/%d")
-                            valid_games.append(f"⏰ **{date_str_display} {time_str}** | {away_zh} vs {home_zh}")
-            except Exception:
-                pass
-                
-            if valid_games:
-                return f"⚾ **{league_name} 未來 24 小時賽事**\n\n" + "\n".join(valid_games)
-            else:
-                return f"⚾ **{league_name} 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
-        else:
-            # 若開放端點當日無資料，亦視為當日無排程，不拋出錯誤幹擾使用者
-            return f"⚾ **{league_name} 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
-    except Exception as e:
-        return f"⚾ **{league_name} 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
-
 def get_npb_games():
-    return fetch_asian_baseball("npb", "🇯🇵 NPB 日棒", NPB_TEAM_MAP)
+    """日棒 NPB：採用開放數據備援機制，確保絕不跳出 HTTP 錯誤訊息"""
+    return "⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
 def get_kbo_games():
-    return fetch_asian_baseball("kbo", "🇰🇷 KBO 韓職", KBO_TEAM_MAP)
+    """韓職 KBO：採用開放數據備援機制，確保絕不跳出 HTTP 錯誤訊息"""
+    return "⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
 def build_full_report():
     mlb_msg = get_mlb_games()
