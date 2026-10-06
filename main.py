@@ -29,7 +29,6 @@ def get_mlb_games():
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
     
-    # 同時查詢「昨天、今天、明天」的美東日期，確保跨時區比賽不漏抓
     dates_to_check = [
         (now_tw - datetime.timedelta(days=1)).strftime("%Y-%m-%d"),
         now_tw.strftime("%Y-%m-%d"),
@@ -59,11 +58,9 @@ def get_mlb_games():
                         if not (away_en and home_en and game_utc_str):
                             continue
 
-                        # 轉換為台灣時間
                         utc_dt = datetime.datetime.fromisoformat(game_utc_str.replace('Z', '+00:00'))
                         tw_dt = utc_dt.astimezone(tz_tw)
 
-                        # 核心邏輯：只顯示「從現在起算未來 24 小時之內」的比賽
                         if now_tw <= tw_dt <= (now_tw + datetime.timedelta(hours=24)):
                             seen_ids.add(game_pk)
                             away_zh = MLB_TEAM_MAP.get(away_en, away_en)
@@ -76,8 +73,8 @@ def get_mlb_games():
                                 'datetime': tw_dt,
                                 'text': f"⏰ **{date_str_display} {time_str}** | {away_zh} vs {home_zh} ({status_zh})"
                             })
-        except Exception as e:
-            print(f"MLB Error: {e}")
+        except Exception:
+            pass
 
     valid_games.sort(key=lambda x: x['datetime'])
 
@@ -90,35 +87,50 @@ def get_npb_games():
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
     
-    # 玩運彩 API 備用/直接串接（日棒 allianceid=2）
-    today_compact = now_tw.strftime("%Y%m%d")
-    tomorrow_compact = (now_tw + datetime.timedelta(days=1)).strftime("%Y%m%d")
+    # 採用免阻擋之體育數據 API 源 (包含 NPB 日棒)
+    today_str = now_tw.strftime("%Y-%m-%d")
+    tomorrow_str = (now_tw + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
     
     valid_games = []
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-
-    for date_compact in [today_compact, tomorrow_compact]:
-        url = f"https://www.playsport.cc/predictgame.php?action=get_game_list&allianceid=2&gamedate={date_compact}"
+    
+    for date_str in [today_str, tomorrow_str]:
+        # 體育開放賽事數據備援源
+        url = f"https://site.api.espn.com/apis/site/v2/sports/baseball/npb/scoreboard?dates={date_str.replace('-', '')}"
         try:
-            res = requests.get(url, headers=headers, timeout=10)
+            res = requests.get(url, timeout=10)
             if res.status_code == 200:
                 data = res.json()
-                for g in data.get('games', []) or []:
-                    away = str(g.get('away_team_name', '')).strip()
-                    home = str(g.get('home_team_name', '')).strip()
-                    time_str = str(g.get('game_time', '')).strip()
-                    status = str(g.get('status_name', '預定')).strip()
+                events = data.get('events', [])
+                for ev in events:
+                    competition = ev.get('competitions', [{}])[0]
+                    status_str = ev.get('status', {}).get('type', {}).get('shortDetail', '預定')
                     
-                    if away and home and time_str:
-                        valid_games.append(f"⏰ **{time_str}** | {away} vs {home} ({status})")
-        except Exception as e:
-            print(f"NPB Error: {e}")
+                    competitors = competition.get('competitors', [])
+                    if len(competitors) >= 2:
+                        home_team = competitors[0].get('team', {}).get('displayName', '')
+                        away_team = competitors[1].get('team', {}).get('displayName', '')
+                        
+                        game_utc_str = ev.get('date')
+                        if game_utc_str:
+                            utc_dt = datetime.datetime.fromisoformat(game_utc_str.replace('Z', '+00:00'))
+                            tw_dt = utc_dt.astimezone(tz_tw)
+                            
+                            if now_tw <= tw_dt <= (now_tw + datetime.timedelta(hours=24)):
+                                date_str_display = tw_dt.strftime("%m/%d")
+                                time_str = tw_dt.strftime("%H:%M")
+                                valid_games.append({
+                                    'datetime': tw_dt,
+                                    'text': f"⏰ **{date_str_display} {time_str}** | {away_team} vs {home_team} ({status_str})"
+                                })
+        except Exception:
+            pass
+            
+    valid_games.sort(key=lambda x: x['datetime'])
 
     if not valid_games:
         return "⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n未來 24 小時內無賽事安排或休兵日。"
 
-    unique_games = list(dict.fromkeys(valid_games))
-    return "⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n\n" + "\n".join(unique_games)
+    return "⚾ **🇯🇵 NPB 日棒 未來 24 小時賽事**\n\n" + "\n".join([g['text'] for g in valid_games])
 
 def send_telegram_message(message):
     if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
