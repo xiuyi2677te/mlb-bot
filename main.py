@@ -3,11 +3,13 @@ import datetime
 import pytz
 import requests
 from bs4 import BeautifulSoup
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# MLB 隊名繁體中文對照
+# 隊名對照表
 MLB_TEAM_MAP = {
     "Arizona Diamondbacks": "響尾蛇", "Atlanta Braves": "勇士", "Baltimore Orioles": "金鶯",
     "Boston Red Sox": "紅襪", "Chicago White Sox": "白襪", "Chicago Cubs": "小熊",
@@ -26,7 +28,6 @@ STATUS_MAP = {
     "Final": "完賽", "Game Over": "完賽", "Postponed": "延賽", "Cancelled": "取消"
 }
 
-# NPB 隊名對照
 NPB_TEAM_MAP = {
     "巨人": "讀賣巨人", "阪神": "阪神虎", "中日": "中日龍", "DeNA": "橫濱DeNA", 
     "広島": "廣島鯉魚", "ヤクルト": "養樂多燕子", "オリックス": "歐力士猛牛", 
@@ -34,7 +35,6 @@ NPB_TEAM_MAP = {
     "西武": "西武獅", "日本ハム": "日本火腿鬥士"
 }
 
-# KBO 隊名繁體中文對照
 KBO_TEAM_MAP = {
     "두산": "斗山熊", "LG": "LG雙子", "키움": "奇움英雄", "SSG": "SSG登陸者", 
     "KT": "KT巫師", "NC": "NC恐龍", "삼성": "三星獅", "롯데": "樂天巨人", 
@@ -149,9 +149,7 @@ def get_kbo_games():
     valid_games = []
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
-    # 直接串接 Naver / KBO 官方開放即時 API (免阻擋)
     for date_compact in [today_str, tomorrow_str]:
-        url = f"https://sports.news.naver.com/kbaseball/schedule/index?date={date_compact}"
         try:
             res = requests.get(f"https://api-gw.sports.naver.com/schedule/games?gameType=KBO&date={date_compact}", headers=headers, timeout=10)
             if res.status_code == 200:
@@ -173,7 +171,6 @@ def get_kbo_games():
         except Exception:
             pass
 
-    # 備用機制防護（針對今日圖片中的賽事）
     if not valid_games:
         today_date = now_tw.strftime("%m/%d")
         valid_games.append(f"⏰ **{today_date} 17:30** | 斗山熊 vs LG雙子 (預定)")
@@ -182,18 +179,47 @@ def get_kbo_games():
     unique_games = list(dict.fromkeys(valid_games))
     return "⚾ **🇰🇷 KBO 韓職 未來 24 小時賽事**\n\n" + "\n".join(unique_games)
 
-def send_telegram_message(message):
-    if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
-        print("❌ 錯誤：未設定 TELEGRAM_BOT_TOKEN 或 CHAT_ID")
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
-    requests.post(url, json=payload)
-
-if __name__ == "__main__":
+def build_full_report():
     mlb_msg = get_mlb_games()
     npb_msg = get_npb_games()
     kbo_msg = get_kbo_games()
+    return f"☀️ **未來 24 小時棒球賽事彙整**\n\n{mlb_msg}\n\n--------------------\n\n{npb_msg}\n\n--------------------\n\n{kbo_msg}"
+
+# 處理 /schedule 指令
+async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    report = build_full_report()
+    await update.message.reply_text(report, parse_mode="Markdown")
+
+# 定時自動推送任務
+async def scheduled_push(context: ContextTypes.DEFAULT_TYPE):
+    if CHAT_ID:
+        report = build_full_report()
+        await context.bot.send_message(chat_id=CHAT_ID, text=report, parse_mode="Markdown")
+
+def main():
+    if not TELEGRAM_BOT_TOKEN:
+        print("❌ 未設定 TELEGRAM_BOT_TOKEN")
+        return
+
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # 註冊 /schedule 指令
+    app.add_handler(CommandHandler("schedule", schedule_command))
+
+    # 設定定時推送 (台灣時間 11:00, 15:00, 19:00, 22:00)
+    tz_tw = pytz.timezone('Asia/Taipei')
+    push_times = [
+        datetime.time(hour=11, minute=0, tzinfo=tz_tw),
+        datetime.time(hour=15, minute=0, tzinfo=tz_tw),
+        datetime.time(hour=19, minute=0, tzinfo=tz_tw),
+        datetime.time(hour=22, minute=0, tzinfo=tz_tw)
+    ]
     
-    full_message = f"☀️ **未來 24 小時棒球賽事彙整**\n\n{mlb_msg}\n\n--------------------\n\n{npb_msg}\n\n--------------------\n\n{kbo_msg}"
-    send_telegram_message(full_message)
+    for t in push_times:
+        app.job_queue.run_daily(scheduled_push, time=t)
+
+    print("🤖 棒球賽事 Telegram Bot 已啟動...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
