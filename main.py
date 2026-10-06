@@ -2,7 +2,6 @@ import os
 import datetime
 import pytz
 import requests
-from apscheduler.schedulers.blocking import BlockingScheduler
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -40,19 +39,7 @@ def send_telegram_message(message):
     payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
     requests.post(url, json=payload)
 
-def daily_job():
+if __name__ == "__main__":
     mlb_msg = get_mlb_schedule()
     full_message = f"☀️ **本日棒球賽事提醒**\n\n{mlb_msg}"
     send_telegram_message(full_message)
-
-if __name__ == "__main__":
-    print("🤖 服務啟動，發送測試訊息...")
-    daily_job()
-    
-    scheduler = BlockingScheduler(timezone="Asia/Taipei")
-    scheduler.add_job(daily_job, 'cron', hour=8, minute=0)
-    print("⏰ 排程已啟動，將於每日 08:00 自動推播。")
-    try:
-        scheduler.start()
-    except (KeyboardInterrupt, SystemExit):
-        pass
