@@ -8,11 +8,9 @@ from bs4 import BeautifulSoup
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# 從環境變數讀取安全金鑰
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# 隊名對照表
 MLB_TEAM_MAP = {
     "Arizona Diamondbacks": "響尾蛇", "Atlanta Braves": "勇士", "Baltimore Orioles": "金鶯",
     "Boston Red Sox": "紅襪", "Chicago White Sox": "白襪", "Chicago Cubs": "小熊",
@@ -39,13 +37,12 @@ NPB_TEAM_MAP = {
 }
 
 KBO_TEAM_MAP = {
-    "두산": "斗山熊", "LG": "LG雙子", "키움": "奇움英雄", "SSG": "SSG登陸者", 
+    "두산": "斗山熊", "LG": "LG雙子", "키움": "培證英雄", "SSG": "SSG登陸者", 
     "KT": "KT巫師", "NC": "NC恐龍", "삼성": "三星獅", "롯데": "樂天巨人", 
     "KIA": "起亞虎", "한화": "韓華鷹", "Doosan": "斗山熊", "Lotte": "樂天巨人",
-    "Kia": "起亞虎", "Hanwha": "韓華鷹", "Samsung": "三星獅"
+    "Kia": "起亞虎", "Hanwha": "韓華鷹", "Samsung": "三星獅", "Kiwoom": "培證英雄"
 }
 
-# 1. 建立 Web Server 供 Render 通訊埠健康檢查（避免部署失敗）
 class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -57,7 +54,6 @@ def run_web_server():
     server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
     server.serve_forever()
 
-# 2. 賽事抓取邏輯
 def get_mlb_games():
     tz_tw = pytz.timezone('Asia/Taipei')
     now_tw = datetime.datetime.now(tz_tw)
@@ -130,11 +126,11 @@ def get_npb_games():
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
-            sections = soup.find_all('section', class_='bb-score')
+            sections = soup.find_all('section', class_='bb-score') or soup.find_all('tr', class_='bb-scoreTable__row')
             
             for sec in sections:
-                teams = sec.find_all('p', class_='bb-score__team')
-                time_tag = sec.find('span', class_='bb-score__time') or sec.find('span', class_='bb-score__state')
+                teams = sec.find_all('p', class_='bb-score__team') or sec.find_all('a', class_='bb-scoreTable__team')
+                time_tag = sec.find('span', class_='bb-score__time') or sec.find('span', class_='bb-score__state') or sec.find('td', class_='bb-scoreTable__state')
                 
                 if len(teams) >= 2 and time_tag:
                     away_raw = teams[0].text.strip()
@@ -144,7 +140,8 @@ def get_npb_games():
                     away_zh = NPB_TEAM_MAP.get(away_raw, away_raw)
                     home_zh = NPB_TEAM_MAP.get(home_raw, home_raw)
                     
-                    valid_games.append(f"⏰ **{time_raw}** | {away_zh} vs {home_zh}")
+                    today_date = now_tw.strftime("%m/%d")
+                    valid_games.append(f"⏰ **{today_date} {time_raw}** | {away_zh} vs {home_zh}")
     except Exception as e:
         print(f"NPB Error: {e}")
 
@@ -198,16 +195,17 @@ def build_full_report():
     kbo_msg = get_kbo_games()
     return f"☀️ **未來 24 小時棒球賽事彙整**\n\n{mlb_msg}\n\n--------------------\n\n{npb_msg}\n\n--------------------\n\n{kbo_msg}"
 
-# 3. 指令與定時處理
 async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     report = build_full_report()
-    await update.message.reply_text(report, parse_mode="Markdown")
+    try:
+        await update.message.reply_text(report, parse_mode="Markdown")
+    except Exception as e:
+        if update.effective_chat:
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=report, parse_mode="Markdown")
 
-# 定時自動推送任務（支援多群組同時發送）
 async def scheduled_push(context: ContextTypes.DEFAULT_TYPE):
     if CHAT_ID:
         report = build_full_report()
-        # 自動用逗號分割多個 CHAT_ID 並發送
         chat_ids = [c.strip() for c in CHAT_ID.split(",") if c.strip()]
         for cid in chat_ids:
             try:
@@ -215,21 +213,16 @@ async def scheduled_push(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 print(f"推送至群組 {cid} 失敗: {e}")
 
-# 4. 主程式啟動
 def main():
     if not TELEGRAM_BOT_TOKEN:
         print("❌ 未設定 TELEGRAM_BOT_TOKEN")
         return
 
-    # 在背景啟動 Web Server 騙過 Render 通訊埠檢查
     threading.Thread(target=run_web_server, daemon=True).start()
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
-    # 註冊 /schedule 指令
     app.add_handler(CommandHandler("schedule", schedule_command))
 
-    # 設定定時推送 (台灣時間 11:00, 15:00, 19:00, 22:00)
     tz_tw = pytz.timezone('Asia/Taipei')
     push_times = [
         datetime.time(hour=11, minute=0, tzinfo=tz_tw),
