@@ -1,18 +1,25 @@
-from fastapi import FastAPI, Response
+import os
+import datetime
+import pytz
 import urllib.request
 import json
 import re
-import datetime
 import ssl
-import os
-import requests
+import logging
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
-app = FastAPI(title="Baseball Schedule Bot API")
+# 設定標準 Log 輸出
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# 建立忽略 SSL 憑證檢查 Context
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+# 預設群組 ID 設定為新群組 -5344474800 (若環境變數有設定則優先讀取，支援逗號分隔多群組)
+CHAT_ID = os.getenv("CHAT_ID", "-5344474800")
+
+# SSL 與時區設定
 ssl_ctx = ssl._create_unverified_context()
-
-# 設定台灣時區 (UTC+8) 與 韓國/日本時區 (UTC+9)
 tz_tw = datetime.timezone(datetime.timedelta(hours=8))
 tz_kr = datetime.timezone(datetime.timedelta(hours=9))
 
@@ -38,18 +45,28 @@ KBO_MAP = {
     "KT": "KT巫師", "삼성": "三星獅"
 }
 
-# 讀取 Render Dashboard 設定的環境變數
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_GROUP_ID = os.environ.get("TELEGRAM_GROUP_ID", "")
+# ----------------------------------------------------
+# Render 伺服器防休眠連接埠設定
+# ----------------------------------------------------
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Baseball Bot is running on Render!")
 
-def build_schedule_text() -> str:
-    """完整賽事資料抓取與排程文字生成邏輯"""
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
+    server.serve_forever()
+
+# ----------------------------------------------------
+# 替換為 test_schedule.py 的核心抓取與文字組裝邏輯
+# ----------------------------------------------------
+def build_full_report() -> str:
     now_tw = datetime.datetime.now(tz_tw)
     lines = ["☀️ 未來 24 小時棒球賽事彙整\n"]
 
-    # ----------------------------------------------------
     # [1] MLB 美職
-    # ----------------------------------------------------
     lines.append("⚾ 🇺🇸 MLB 美職")
     try:
         start_d = (now_tw - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
@@ -81,9 +98,7 @@ def build_schedule_text() -> str:
 
     lines.append("\n──────────────\n")
 
-    # ----------------------------------------------------
     # [2] NPB 日棒
-    # ----------------------------------------------------
     lines.append("⚾ 🇯🇵 NPB 日棒")
     npb_success = False
     npb_fetched = False
@@ -171,9 +186,7 @@ def build_schedule_text() -> str:
 
     lines.append("\n──────────────\n")
 
-    # ----------------------------------------------------
     # [3] KBO 韓職
-    # ----------------------------------------------------
     lines.append("⚾ 🇰🇷 KBO 韓職")
     try:
         today_kr = now_tw.strftime("%Y-%m-%d")
@@ -223,41 +236,56 @@ def build_schedule_text() -> str:
 
     return "\n".join(lines)
 
-def send_telegram_msg(text: str):
-    """發送訊息至 Telegram 群組"""
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_GROUP_ID:
-        return {"error": "未設定 TELEGRAM_BOT_TOKEN 或 TELEGRAM_GROUP_ID"}
-        
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_GROUP_ID,
-        "text": text,
-        "parse_mode": "Markdown"
-    }
-    res = requests.post(url, json=payload, timeout=10)
-    return res.json()
+# ----------------------------------------------------
+# Telegram Bot 指令與定時觸發
+# ----------------------------------------------------
+async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """處理群組中的 /schedule 指令"""
+    report = build_full_report()
+    try:
+        await update.message.reply_text(report, parse_mode="Markdown")
+    except Exception as e:
+        if update.effective_chat:
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=report, parse_mode="Markdown")
 
-# 端點 1: 純文字輸出 (ManyChat / 網頁瀏覽)
-@app.get("/")
-@app.get("/schedule")
-def get_schedule_text():
-    text = build_schedule_text()
-    return Response(content=text, media_type="text/plain; charset=utf-8")
+async def scheduled_push(context: ContextTypes.DEFAULT_TYPE):
+    """定時自動推播"""
+    if CHAT_ID:
+        report = build_full_report()
+        chat_ids = [c.strip() for c in CHAT_ID.split(",") if c.strip()]
+        for cid in chat_ids:
+            try:
+                await context.bot.send_message(chat_id=cid, text=report, parse_mode="Markdown")
+            except Exception as e:
+                logging.error(f"Push to {cid} failed: {e}")
 
-# 端點 2: JSON 格式輸出
-@app.get("/api/schedule")
-def get_schedule_json():
-    text = build_schedule_text()
-    return {"status": "success", "data": text}
+def main():
+    if not TELEGRAM_BOT_TOKEN:
+        logging.critical("❌ 未設定 TELEGRAM_BOT_TOKEN")
+        return
 
-# 端點 3: Cron-Job 雲端觸發 Telegram 自動推播專用
-@app.get("/push_telegram")
-def trigger_push():
-    content = build_schedule_text()
-    result = send_telegram_msg(content)
-    return {"status": "success", "telegram_response": result}
+    # 背景啟動 HTTP 伺服器
+    threading.Thread(target=run_web_server, daemon=True).start()
+
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    
+    # 註冊 /schedule 指令處理器
+    app.add_handler(CommandHandler("schedule", schedule_command))
+
+    # 🎯 設定定時排程 (11:00, 15:00, 19:00, 23:00)
+    tz_taipei = pytz.timezone('Asia/Taipei')
+    push_times = [
+        datetime.time(hour=11, minute=0, tzinfo=tz_taipei),
+        datetime.time(hour=15, minute=0, tzinfo=tz_taipei),
+        datetime.time(hour=19, minute=0, tzinfo=tz_taipei),
+        datetime.time(hour=23, minute=0, tzinfo=tz_taipei)
+    ]
+    
+    for t in push_times:
+        app.job_queue.run_daily(scheduled_push, time=t)
+
+    logging.info("🤖 棒球賽事 Telegram Bot 已啟動，等待 /schedule 或定時推播...")
+    app.run_polling()
 
 if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    main()
