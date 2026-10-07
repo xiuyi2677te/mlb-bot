@@ -23,13 +23,38 @@ ssl_ctx = ssl._create_unverified_context()
 tz_tw = datetime.timezone(datetime.timedelta(hours=8))
 tz_kr = datetime.timezone(datetime.timedelta(hours=9))
 
-# 精簡版隊伍中文對照表
+# MLB 全 30 隊完整中文名稱對照表
 MLB_MAP = {
-    "Los Angeles Dodgers": "道奇", "Atlanta Braves": "勇士",
-    "Milwaukee Brewers": "釀酒人", "San Diego Padres": "教士",
-    "Cleveland Guardians": "守護者", "Chicago White Sox": "白襪",
-    "New York Yankees": "洋基", "Boston Red Sox": "紅襪",
-    "Houston Astros": "太空人", "Philadelphia Phillies": "費城人"
+    "Tampa Bay Rays": "光芒",
+    "New York Yankees": "洋基",
+    "Boston Red Sox": "紅襪",
+    "Baltimore Orioles": "金鶯",
+    "Toronto Blue Jays": "藍鳥",
+    "Los Angeles Dodgers": "道奇",
+    "San Francisco Giants": "巨人",
+    "San Diego Padres": "教士",
+    "Arizona Diamondbacks": "響尾蛇",
+    "Colorado Rockies": "落磯",
+    "Atlanta Braves": "勇士",
+    "Philadelphia Phillies": "費城人",
+    "New York Mets": "大都會",
+    "Miami Marlins": "馬林魚",
+    "Washington Nationals": "國民",
+    "Chicago Cubs": "小熊",
+    "Milwaukee Brewers": "釀酒人",
+    "St. Louis Cardinals": "紅雀",
+    "Cincinnati Reds": "紅人",
+    "Pittsburgh Pirates": "海盜",
+    "Houston Astros": "太空人",
+    "Texas Rangers": "遊騎兵",
+    "Seattle Mariners": "水手",
+    "Oakland Athletics": "運動家",
+    "Los Angeles Angels": "天使",
+    "Cleveland Guardians": "守護者",
+    "Minnesota Twins": "雙城",
+    "Detroit Tigers": "老虎",
+    "Kansas City Royals": "皇家",
+    "Chicago White Sox": "白襪"
 }
 
 NPB_MAP = {
@@ -278,12 +303,11 @@ def main():
     # 註冊 /schedule 指令處理器
     app.add_handler(CommandHandler("schedule", schedule_command))
 
-    # 🎯 設定定時排程 (11:00, 15:00, 19:00, 23:00)
+    # 🎯 設定定時排程 (已剔除 19:00，保留 11:00, 15:00, 23:00)
     tz_taipei = pytz.timezone('Asia/Taipei')
     push_times = [
         datetime.time(hour=11, minute=0, tzinfo=tz_taipei),
         datetime.time(hour=15, minute=0, tzinfo=tz_taipei),
-        datetime.time(hour=19, minute=0, tzinfo=tz_taipei),
         datetime.time(hour=23, minute=0, tzinfo=tz_taipei)
     ]
     
