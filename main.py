@@ -39,7 +39,7 @@ MLB_MAP = {
     "Detroit Tigers": "老虎", "Kansas City Royals": "皇家", "Chicago White Sox": "白襪"
 }
 
-# NPB 隊伍完整中文名稱對照表 (含全形/半形/不同別名)
+# NPB 隊伍完整中文名稱對照表 (含全形/半形/別名)
 NPB_MAP = {
     "阪神": "阪神虎", "広島": "廣島鯉魚", "巨人": "讀賣巨人", 
     "DeNA": "橫濱", "ＤｅＮＡ": "橫濱", "横浜": "橫濱",
@@ -114,7 +114,7 @@ def get_upcoming_games_list() -> list:
     except Exception as e:
         logging.error(f"MLB fetch error: {e}")
 
-    # [2] NPB 日棒 (防重複與隊名映射全面優化)
+    # [2] NPB 日棒
     dates_to_check = [
         now_tw.strftime("%Y-%m-%d"),
         (now_tw + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
@@ -124,7 +124,7 @@ def get_upcoming_games_list() -> list:
         'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
     }
 
-    seen_npb_ids = set()
+    seen_npb_keys = set()
 
     for date_str in dates_to_check:
         url_npb = f"https://baseball.yahoo.co.jp/npb/schedule/?date={date_str}"
@@ -133,7 +133,7 @@ def get_upcoming_games_list() -> list:
             with urllib.request.urlopen(req, context=ssl_ctx, timeout=10) as resp:
                 html = resp.read().decode('utf-8')
                 
-                # 方法 A: 提取 PRELOADED STATE JSON
+                # 方法 A: PRELOADED STATE JSON 抓取
                 json_match = re.search(r'window\.__PRELOADED_STATE__\s*=\s*({[\s\S]*?});</script>', html)
                 if json_match:
                     try:
@@ -152,11 +152,11 @@ def get_upcoming_games_list() -> list:
                                 if now_tw <= g_dt <= future_24h:
                                     away = NPB_MAP.get(away_raw, away_raw)
                                     home = NPB_MAP.get(home_raw, home_raw)
-                                    game_key = f"{away}_{home}_{g_dt.timestamp()}"
-                                    if game_key not in seen_npb_ids:
-                                        seen_npb_ids.add(game_key)
+                                    g_key = f"{away}_{home}_{g_dt.timestamp()}"
+                                    if g_key not in seen_npb_keys:
+                                        seen_npb_keys.add(g_key)
                                         games_list.append({
-                                            'id': f"NPB_{game_key}",
+                                            'id': f"NPB_{g_key}",
                                             'league': '⚾ 🇯🇵 NPB 日棒',
                                             'time': g_dt,
                                             'away': away,
@@ -165,7 +165,7 @@ def get_upcoming_games_list() -> list:
                     except Exception as je:
                         logging.error(f"NPB JSON parse error: {je}")
 
-                # 方法 B: HTML 卡片解析備援
+                # 方法 B: HTML 卡片正則解析備援
                 cards = re.findall(r'class="bb-score__item"[\s\S]*?</section>', html) or \
                         re.findall(r'<div class="bb-score__content">[\s\S]*?</div>\s*</div>', html) or \
                         re.findall(r'<tr class="bb-calendarTable__row">[\s\S]*?</tr>', html)
@@ -184,11 +184,11 @@ def get_upcoming_games_list() -> list:
                         g_dt = datetime.datetime.strptime(f"{date_str} {hh:02d}:{mm}", "%Y-%m-%d %H:%M").replace(tzinfo=tz_tw)
                         
                         if now_tw <= g_dt <= future_24h:
-                            game_key = f"{found_teams[0]}_{found_teams[1]}_{g_dt.timestamp()}"
-                            if game_key not in seen_npb_ids:
-                                seen_npb_ids.add(game_key)
+                            g_key = f"{found_teams[0]}_{found_teams[1]}_{g_dt.timestamp()}"
+                            if g_key not in seen_npb_keys:
+                                seen_npb_keys.add(g_key)
                                 games_list.append({
-                                    'id': f"NPB_{game_key}",
+                                    'id': f"NPB_{g_key}",
                                     'league': '⚾ 🇯🇵 NPB 日棒',
                                     'time': g_dt,
                                     'away': found_teams[0],
