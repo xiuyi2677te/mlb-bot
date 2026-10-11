@@ -8,7 +8,7 @@ import ssl
 import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update, BotCommand
+from telegram import Update, BotCommand  # 👈 補上 BotCommand 匯入
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # 設定標準 Log 輸出
@@ -110,7 +110,7 @@ def get_upcoming_games_list() -> list:
     except Exception as e:
         logging.error(f"MLB fetch error for reminders: {e}")
 
-    # [2] NPB 日棒 (完全採用原版正則卡片抓取邏輯)
+    # [2] NPB 日棒
     dates_to_check = [
         now_tw.strftime("%Y-%m-%d"),
         (now_tw + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
@@ -183,149 +183,4 @@ def get_upcoming_games_list() -> list:
                     away = KBO_MAP.get(away_raw, away_raw)
                     home = KBO_MAP.get(home_raw, home_raw)
                     games_list.append({
-                        'id': f"KBO_{away}_{home}_{game_dt.timestamp()}",
-                        'league': '⚾ 🇰🇷 KBO 韓職',
-                        'time': game_dt,
-                        'away': away,
-                        'home': home
-                    })
-    except Exception as e:
-        logging.error(f"KBO fetch error for reminders: {e}")
-
-    return games_list
-
-# ----------------------------------------------------
-# 100% 原版賽事抓取與文字組裝邏輯 (維持不變)
-# ----------------------------------------------------
-def build_full_report() -> str:
-    now_tw = datetime.datetime.now(tz_tw)
-    future_24h = now_tw + datetime.timedelta(hours=24)
-    lines = ["☀️ 未來 24 小時棒球賽事彙整\n"]
-
-    # [1] MLB 美職
-    lines.append("⚾ 🇺🇸 MLB 美職")
-    try:
-        start_d = (now_tw - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-        end_d = (now_tw + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-        url_mlb = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate={start_d}&endDate={end_d}"
-        
-        req = urllib.request.Request(url_mlb, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, context=ssl_ctx, timeout=10) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-            count = 0
-            for date_item in data.get('dates', []):
-                for game in date_item.get('games', []):
-                    utc_str = game.get('gameDate')
-                    if not utc_str: continue
-                    utc_dt = datetime.datetime.fromisoformat(utc_str.replace('Z', '+00:00'))
-                    game_dt = utc_dt.astimezone(tz_tw)
-                    
-                    if now_tw <= game_dt <= future_24h:
-                        away_raw = game.get('teams', {}).get('away', {}).get('team', {}).get('name', '未知')
-                        home_raw = game.get('teams', {}).get('home', {}).get('team', {}).get('name', '未知')
-                        away = MLB_MAP.get(away_raw, away_raw)
-                        home = MLB_MAP.get(home_raw, home_raw)
-                        lines.append(f"{game_dt.strftime('%m/%d %H:%M')} ⏰ {away} vs {home}")
-                        count += 1
-            if count == 0:
-                lines.append("24 小時內無賽事")
-    except Exception as e:
-        lines.append(f"⚠️ 數據連線異常: {e}")
-
-    lines.append("\n──────────────\n")
-
-    # [2] NPB 日棒
-    lines.append("⚾ 🇯🇵 NPB 日棒")
-    npb_success = False
-    npb_fetched = False
-    last_err = None
-
-    dates_to_check = [
-        now_tw.strftime("%Y-%m-%d"),
-        (now_tw + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-    ]
-
-    headers_npb = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
-    }
-
-    count_npb = 0
-    for date_str in dates_to_check:
-        url_npb = f"https://baseball.yahoo.co.jp/npb/schedule/?date={date_str}"
-        try:
-            req = urllib.request.Request(url_npb, headers=headers_npb)
-            with urllib.request.urlopen(req, context=ssl_ctx, timeout=10) as resp:
-                html = resp.read().decode('utf-8')
-                npb_fetched = True
-                
-                json_match = re.search(r'window\.__PRELOADED_STATE__\s*=\s*({[\s\S]*?});</script>', html)
-                if json_match:
-                    try:
-                        js_data = json.loads(json_match.group(1))
-                        schedule = js_data.get('schedule', {})
-                        games = schedule.get('games', []) or js_data.get('games', [])
-                        
-                        for g in games:
-                            away_raw = g.get('awayTeam', {}).get('name') or g.get('away', '')
-                            home_raw = g.get('homeTeam', {}).get('name') or g.get('home', '')
-                            if away_raw and home_raw:
-                                time_raw = g.get('startTime', '18:00')
-                                hh = int(time_raw.split(':')[0]) - 1 if ':' in time_raw else 17
-                                mm = time_raw.split(':')[1] if ':' in time_raw else "00"
-                                
-                                g_dt = datetime.datetime.strptime(f"{date_str} {hh:02d}:{mm}", "%Y-%m-%d %H:%M").replace(tzinfo=tz_tw)
-                                if now_tw <= g_dt <= future_24h:
-                                    away = NPB_MAP.get(away_raw, away_raw)
-                                    home = NPB_MAP.get(home_raw, home_raw)
-                                    lines.append(f"{g_dt.strftime('%m/%d %H:%M')} ⏰ {away} vs {home}")
-                                    count_npb += 1
-                        if count_npb > 0:
-                            npb_success = True
-                            continue
-                    except Exception:
-                        pass
-
-                cards = re.findall(r'class="bb-score__item"[\s\S]*?</section>', html) or \
-                        re.findall(r'<div class="bb-score__content">[\s\S]*?</div>\s*</div>', html) or \
-                        re.findall(r'<tr class="bb-calendarTable__row">[\s\S]*?</tr>', html)
-                
-                for card in cards:
-                    found_teams = []
-                    for team_key in NPB_MAP.keys():
-                        if team_key in card and NPB_MAP[team_key] not in found_teams:
-                            found_teams.append(NPB_MAP[team_key])
-                    
-                    if len(found_teams) == 2:
-                        time_match = re.search(r'(\d{1,2}:\d{2})', card)
-                        jst_time = time_match.group(1) if time_match else "18:00"
-                        hh = int(jst_time.split(':')[0]) - 1
-                        mm = jst_time.split(':')[1]
-                        
-                        g_dt = datetime.datetime.strptime(f"{date_str} {hh:02d}:{mm}", "%Y-%m-%d %H:%M").replace(tzinfo=tz_tw)
-                        if now_tw <= g_dt <= future_24h:
-                            lines.append(f"{g_dt.strftime('%m/%d %H:%M')} ⏰ {found_teams[0]} vs {found_teams[1]}")
-                            count_npb += 1
-                        
-                if count_npb > 0:
-                    npb_success = True
-        except Exception as e:
-            last_err = e
-            continue
-
-    if count_npb == 0:
-        if npb_fetched:
-            lines.append("24 小時內無賽事")
-        else:
-            lines.append(f"⚠️ 數據連線異常: {last_err}")
-
-    lines.append("\n──────────────\n")
-
-    # [3] KBO 韓職
-    lines.append("⚾ 🇰🇷 KBO 韓職")
-    try:
-        today_kr = now_tw.strftime("%Y-%m-%d")
-        tomorrow_kr = (now_tw + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-        url_kbo = f"https://api-gw.sports.naver.com/schedule/games?upperCategoryId=kbaseball&fromDate={today_kr}&toDate={tomorrow_kr}"
-        headers_kbo = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.
+                        'id': f"KBO_{
