@@ -22,6 +22,9 @@ ssl_ctx = ssl._create_unverified_context()
 tz_tw = datetime.timezone(datetime.timedelta(hours=8))
 tz_kr = datetime.timezone(datetime.timedelta(hours=9))
 
+# 防重複推播記憶體快取: "game_id_reminder_type"
+notified_games = set()
+
 # MLB 全 30 隊完整中文名稱對照表
 MLB_MAP = {
     "Tampa Bay Rays": "光芒", "New York Yankees": "洋基", "Boston Red Sox": "紅襪",
@@ -70,15 +73,14 @@ def run_web_server():
     server.serve_forever()
 
 # ----------------------------------------------------
-# 賽事抓取與文字組裝邏輯
+# 取得未來 24 小時結構化賽事資料列表
 # ----------------------------------------------------
-def build_full_report() -> str:
+def get_upcoming_games_list() -> list:
     now_tw = datetime.datetime.now(tz_tw)
     future_24h = now_tw + datetime.timedelta(hours=24)
-    lines = ["☀️ 未來 24 小時棒球賽事彙整\n"]
+    games_list = []
 
     # [1] MLB 美職
-    lines.append("⚾ 🇺🇸 MLB 美職")
     try:
         start_d = (now_tw - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
         end_d = (now_tw + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
@@ -87,7 +89,6 @@ def build_full_report() -> str:
         req = urllib.request.Request(url_mlb, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, context=ssl_ctx, timeout=10) as resp:
             data = json.loads(resp.read().decode('utf-8'))
-            count = 0
             for date_item in data.get('dates', []):
                 for game in date_item.get('games', []):
                     utc_str = game.get('gameDate')
@@ -96,44 +97,37 @@ def build_full_report() -> str:
                     game_dt = utc_dt.astimezone(tz_tw)
                     
                     if now_tw <= game_dt <= future_24h:
+                        game_pk = str(game.get('gamePk', ''))
                         away_raw = game.get('teams', {}).get('away', {}).get('team', {}).get('name', '未知')
                         home_raw = game.get('teams', {}).get('home', {}).get('team', {}).get('name', '未知')
                         away = MLB_MAP.get(away_raw, away_raw)
                         home = MLB_MAP.get(home_raw, home_raw)
-                        lines.append(f"{game_dt.strftime('%m/%d %H:%M')} ⏰ {away} vs {home}")
-                        count += 1
-            if count == 0:
-                lines.append("24 小時內無賽事")
+                        games_list.append({
+                            'id': f"MLB_{game_pk}_{game_dt.timestamp()}",
+                            'league': '⚾ 🇺🇸 MLB 美職',
+                            'time': game_dt,
+                            'away': away,
+                            'home': home
+                        })
     except Exception as e:
-        lines.append(f"⚠️ 數據連線異常: {e}")
+        logging.error(f"MLB fetch error: {e}")
 
-    lines.append("\n──────────────\n")
-
-    # [2] NPB 日棒 (查詢今日與明日，並嚴格過濾未來 24 小時)
-    lines.append("⚾ 🇯🇵 NPB 日棒")
-    npb_success = False
-    npb_fetched = False
-    last_err = None
-
+    # [2] NPB 日棒
     dates_to_check = [
         now_tw.strftime("%Y-%m-%d"),
         (now_tw + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
     ]
-
     headers_npb = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
     }
 
-    count_npb = 0
     for date_str in dates_to_check:
         url_npb = f"https://baseball.yahoo.co.jp/npb/schedule/?date={date_str}"
         try:
             req = urllib.request.Request(url_npb, headers=headers_npb)
             with urllib.request.urlopen(req, context=ssl_ctx, timeout=10) as resp:
                 html = resp.read().decode('utf-8')
-                npb_fetched = True
-                
                 json_match = re.search(r'window\.__PRELOADED_STATE__\s*=\s*({[\s\S]*?});</script>', html)
                 if json_match:
                     try:
@@ -148,16 +142,18 @@ def build_full_report() -> str:
                                 time_raw = g.get('startTime', '18:00')
                                 hh = int(time_raw.split(':')[0]) - 1 if ':' in time_raw else 17
                                 mm = time_raw.split(':')[1] if ':' in time_raw else "00"
-                                
                                 g_dt = datetime.datetime.strptime(f"{date_str} {hh:02d}:{mm}", "%Y-%m-%d %H:%M").replace(tzinfo=tz_tw)
+                                
                                 if now_tw <= g_dt <= future_24h:
                                     away = NPB_MAP.get(away_raw, away_raw)
                                     home = NPB_MAP.get(home_raw, home_raw)
-                                    lines.append(f"{g_dt.strftime('%m/%d %H:%M')} ⏰ {away} vs {home}")
-                                    count_npb += 1
-                        if count_npb > 0:
-                            npb_success = True
-                            continue
+                                    games_list.append({
+                                        'id': f"NPB_{away}_{home}_{g_dt.timestamp()}",
+                                        'league': '⚾ 🇯🇵 NPB 日棒',
+                                        'time': g_dt,
+                                        'away': away,
+                                        'home': home
+                                    })
                     except Exception:
                         pass
 
@@ -176,53 +172,40 @@ def build_full_report() -> str:
                         jst_time = time_match.group(1) if time_match else "18:00"
                         hh = int(jst_time.split(':')[0]) - 1
                         mm = jst_time.split(':')[1]
-                        
                         g_dt = datetime.datetime.strptime(f"{date_str} {hh:02d}:{mm}", "%Y-%m-%d %H:%M").replace(tzinfo=tz_tw)
-                        if now_tw <= g_dt <= future_24h:
-                            lines.append(f"{g_dt.strftime('%m/%d %H:%M')} ⏰ {found_teams[0]} vs {found_teams[1]}")
-                            count_npb += 1
                         
-                if count_npb > 0:
-                    npb_success = True
+                        if now_tw <= g_dt <= future_24h:
+                            games_list.append({
+                                'id': f"NPB_{found_teams[0]}_{found_teams[1]}_{g_dt.timestamp()}",
+                                'league': '⚾ 🇯🇵 NPB 日棒',
+                                'time': g_dt,
+                                'away': found_teams[0],
+                                'home': found_teams[1]
+                            })
         except Exception as e:
-            last_err = e
-            continue
+            logging.error(f"NPB fetch error: {e}")
 
-    if count_npb == 0:
-        if npb_fetched:
-            lines.append("24 小時內無賽事")
-        else:
-            lines.append(f"⚠️ 數據連線異常: {last_err}")
-
-    lines.append("\n──────────────\n")
-
-    # [3] KBO 韓職 (查詢今日與明日，並嚴格過濾未來 24 小時)
-    lines.append("⚾ 🇰🇷 KBO 韓職")
+    # [3] KBO 韓職
     try:
         today_kr = now_tw.strftime("%Y-%m-%d")
         tomorrow_kr = (now_tw + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
         url_kbo = f"https://api-gw.sports.naver.com/schedule/games?upperCategoryId=kbaseball&fromDate={today_kr}&toDate={tomorrow_kr}"
         headers_kbo = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Referer': 'https://sports.news.naver.com/',
             'Accept': 'application/json, text/plain, */*'
         }
         req = urllib.request.Request(url_kbo, headers=headers_kbo)
         
         with urllib.request.urlopen(req, context=ssl_ctx, timeout=10) as resp:
-            res_text = resp.read().decode('utf-8')
-            data = json.loads(res_text)
-            
+            data = json.loads(resp.read().decode('utf-8'))
             result = data.get('result', {})
             games = result.get('games', []) or data.get('games', []) or []
-            count_kbo = 0
             for g in games:
                 away_raw = g.get('awayTeamName')
                 home_raw = g.get('homeTeamName')
+                if not away_raw or not home_raw: continue
                 
-                if not away_raw or not home_raw:
-                    continue
-                    
                 g_date_str = g.get('gameDate') or today_kr
                 kst_time_str = g.get('gameStartTime') or g.get('startTime') or "18:30"
                 
@@ -235,18 +218,84 @@ def build_full_report() -> str:
                 if now_tw <= game_dt <= future_24h:
                     away = KBO_MAP.get(away_raw, away_raw)
                     home = KBO_MAP.get(home_raw, home_raw)
-                    lines.append(f"{game_dt.strftime('%m/%d %H:%M')} ⏰ {away} vs {home}")
-                    count_kbo += 1
-                
-            if count_kbo == 0:
-                lines.append("24 小時內無賽事")
+                    games_list.append({
+                        'id': f"KBO_{away}_{home}_{game_dt.timestamp()}",
+                        'league': '⚾ 🇰🇷 KBO 韓職',
+                        'time': game_dt,
+                        'away': away,
+                        'home': home
+                    })
     except Exception as e:
-        lines.append(f"⚠️ 數據連線異常: {e}")
+        logging.error(f"KBO fetch error: {e}")
 
-    lines.append("\n──────────────\n")
+    return games_list
+
+# ----------------------------------------------------
+# 定時戰報文字組裝邏輯
+# ----------------------------------------------------
+def build_full_report() -> str:
+    games = get_upcoming_games_list()
+    lines = ["☀️ 未來 24 小時棒球賽事彙整\n"]
+
+    leagues = ['⚾ 🇺🇸 MLB 美職', '⚾ 🇯🇵 NPB 日棒', '⚾ 🇰🇷 KBO 韓職']
+    for lg in leagues:
+        lines.append(lg)
+        lg_games = [g for g in games if g['league'] == lg]
+        if lg_games:
+            for g in lg_games:
+                lines.append(f"{g['time'].strftime('%m/%d %H:%M')} ⏰ {g['away']} vs {g['home']}")
+        else:
+            lines.append("24 小時內無賽事")
+        lines.append("\n──────────────\n")
+
     lines.append("‼️ 通知:定時 記得下注")
-
     return "\n".join(lines)
+
+# ----------------------------------------------------
+# 即時開打提醒邏輯 (賽前 10 分鐘與 5 分鐘)
+# ----------------------------------------------------
+async def check_and_send_game_reminders(context: ContextTypes.DEFAULT_TYPE):
+    now_tw = datetime.datetime.now(tz_tw)
+    games = get_upcoming_games_list()
+
+    # 定義提醒時間區間 (秒數範圍)
+    reminder_rules = [
+        {'type': '10min', 'label': '10 分鐘', 'min_sec': 540, 'max_sec': 660},
+        {'type': '5min',  'label': '5 分鐘',  'min_sec': 240, 'max_sec': 360}
+    ]
+
+    for rule in reminder_rules:
+        target_games = []
+        for g in games:
+            diff_sec = (g['time'] - now_tw).total_seconds()
+            key = f"{g['id']}_{rule['type']}"
+
+            if rule['min_sec'] <= diff_sec <= rule['max_sec'] and key not in notified_games:
+                target_games.append((g, key))
+
+        if target_games:
+            lines = [f"🚨 賽事開打預告 (剩餘 {rule['label']})\n"]
+            grouped_by_league = {}
+            for g, key in target_games:
+                grouped_by_league.setdefault(g['league'], []).append(g)
+                notified_games.add(key)  # 標記已通知
+
+            for league_name, lg_games in grouped_by_league.items():
+                lines.append(league_name)
+                for g in lg_games:
+                    lines.append(f"{g['time'].strftime('%m/%d %H:%M')} ⏰ {g['away']} vs {g['home']}")
+                lines.append("")
+
+            lines.append("──────────────")
+            lines.append("‼️ 提醒：比賽即將開始，請確認下注狀況！")
+
+            msg = "\n".join(lines)
+            chat_ids = [c.strip() for c in CHAT_ID.split(",") if c.strip()]
+            for cid in chat_ids:
+                try:
+                    await context.bot.send_message(chat_id=cid, text=msg)
+                except Exception as e:
+                    logging.error(f"Reminder push to {cid} failed: {e}")
 
 # ----------------------------------------------------
 # Telegram Bot 指令與定時觸發
@@ -284,18 +333,20 @@ def main():
     # 註冊 /schedule 指令處理器
     app.add_handler(CommandHandler("schedule", schedule_command))
 
-    # 🎯 設定定時排程 (11:00, 15:00, 23:00)
+    # 1. 🎯 設定每日定時排程 (11:00, 15:00, 23:00)
     tz_taipei = pytz.timezone('Asia/Taipei')
     push_times = [
         datetime.time(hour=11, minute=0, tzinfo=tz_taipei),
         datetime.time(hour=15, minute=0, tzinfo=tz_taipei),
         datetime.time(hour=23, minute=0, tzinfo=tz_taipei)
     ]
-    
     for t in push_times:
         app.job_queue.run_daily(scheduled_push, time=t)
 
-    logging.info("🤖 棒球賽事 Telegram Bot 已啟動，等待 /schedule 或定時推播...")
+    # 2. 🎯 每 60 秒檢查一次賽前 10 分鐘與 5 分鐘提醒
+    app.job_queue.run_repeating(check_and_send_game_reminders, interval=60, first=10)
+
+    logging.info("🤖 棒球賽事 Telegram Bot 已啟動（含賽前 10/5 分鐘動態提醒功能）...")
     app.run_polling()
 
 if __name__ == "__main__":
