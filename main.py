@@ -245,4 +245,142 @@ def get_upcoming_games_list() -> list:
 # ----------------------------------------------------
 # 定時戰報文字組裝邏輯
 # ----------------------------------------------------
-def build_full_report() -> str
+def build_full_report() -> str:
+    games = get_upcoming_games_list()
+    lines = ["☀️ 未來 24 小時棒球賽事彙整\n"]
+
+    leagues = ['⚾ 🇺🇸 MLB 美職', '⚾ 🇯🇵 NPB 日棒', '⚾ 🇰🇷 KBO 韓職']
+    for lg in leagues:
+        lines.append(lg)
+        lg_games = [g for g in games if g['league'] == lg]
+        if lg_games:
+            for g in lg_games:
+                lines.append(f"{g['time'].strftime('%m/%d %H:%M')} ⏰ {g['away']} vs {g['home']}")
+        else:
+            lines.append("24 小時內無賽事")
+        lines.append("\n──────────────\n")
+
+    lines.append("‼️ 通知:定時 記得下注")
+    return "\n".join(lines)
+
+# ----------------------------------------------------
+# 即時開打提醒邏輯 (賽前 10 分鐘與 5 分鐘)
+# ----------------------------------------------------
+async def check_and_send_game_reminders(context: ContextTypes.DEFAULT_TYPE):
+    now_tw = datetime.datetime.now(tz_tw)
+    games = get_upcoming_games_list()
+
+    reminder_rules = [
+        {'type': '10min', 'label': '10 分鐘', 'min_sec': 540, 'max_sec': 660},
+        {'type': '5min',  'label': '5 分鐘',  'min_sec': 240, 'max_sec': 360}
+    ]
+
+    for rule in reminder_rules:
+        target_games = []
+        for g in games:
+            diff_sec = (g['time'] - now_tw).total_seconds()
+            key = f"{g['id']}_{rule['type']}"
+
+            if rule['min_sec'] <= diff_sec <= rule['max_sec'] and key not in notified_games:
+                target_games.append((g, key))
+
+        if target_games:
+            lines = [f"🚨 賽事開打預告 (剩餘 {rule['label']})\n"]
+            grouped_by_league = {}
+            for g, key in target_games:
+                grouped_by_league.setdefault(g['league'], []).append(g)
+                notified_games.add(key)
+
+            for league_name, lg_games in grouped_by_league.items():
+                lines.append(league_name)
+                for g in lg_games:
+                    lines.append(f"{g['time'].strftime('%m/%d %H:%M')} ⏰ {g['away']} vs {g['home']}")
+                lines.append("")
+
+            lines.append("──────────────")
+            lines.append("‼️ 提醒：比賽即將開始，請確認下注狀況！")
+
+            msg = "\n".join(lines)
+            chat_ids = [c.strip() for c in CHAT_ID.split(",") if c.strip()]
+            for cid in chat_ids:
+                try:
+                    await context.bot.send_message(chat_id=cid, text=msg)
+                except Exception as e:
+                    logging.error(f"Reminder push to {cid} failed: {e}")
+
+# ----------------------------------------------------
+# Telegram Bot 指令處理
+# ----------------------------------------------------
+async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """處理群組中的 /schedule 指令"""
+    report = build_full_report()
+    try:
+        await update.message.reply_text(report)
+    except Exception as e:
+        if update.effective_chat:
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=report)
+
+async def test_reminder_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """處理群組中的 /test_reminder 指令"""
+    games = get_upcoming_games_list()
+    if not games:
+        await update.message.reply_text("⚠️ 目前未來 24 小時內沒有抓到任何賽事可供測試。")
+        return
+
+    sample_game = games[0]
+    lines = [
+        "🧪 【模擬測試】賽事開打預告 (剩餘 10 分鐘)\n",
+        sample_game['league'],
+        f"{sample_game['time'].strftime('%m/%d %H:%M')} ⏰ {sample_game['away']} vs {sample_game['home']}\n",
+        "──────────────",
+        "‼️ 提醒：比賽即將開始，請確認下注狀況！"
+    ]
+    await update.message.reply_text("\n".join(lines))
+
+async def post_init(application: Application):
+    """Bot 啟動時自動註冊 Telegram 指令選單"""
+    commands = [
+        BotCommand("schedule", "📊 獲取未來24小時棒球賽事戰報"),
+        BotCommand("test_reminder", "🧪 測試賽事推播")
+    ]
+    await application.bot.set_my_commands(commands)
+
+async def scheduled_push(context: ContextTypes.DEFAULT_TYPE):
+    """定時自動推播"""
+    if CHAT_ID:
+        report = build_full_report()
+        chat_ids = [c.strip() for c in CHAT_ID.split(",") if c.strip()]
+        for cid in chat_ids:
+            try:
+                await context.bot.send_message(chat_id=cid, text=report)
+            except Exception as e:
+                logging.error(f"Push to {cid} failed: {e}")
+
+def main():
+    if not TELEGRAM_BOT_TOKEN:
+        logging.critical("❌ 未設定 TELEGRAM_BOT_TOKEN")
+        return
+
+    threading.Thread(target=run_web_server, daemon=True).start()
+
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
+    
+    app.add_handler(CommandHandler("schedule", schedule_command))
+    app.add_handler(CommandHandler("test_reminder", test_reminder_command))
+
+    tz_taipei = pytz.timezone('Asia/Taipei')
+    push_times = [
+        datetime.time(hour=11, minute=0, tzinfo=tz_taipei),
+        datetime.time(hour=15, minute=0, tzinfo=tz_taipei),
+        datetime.time(hour=23, minute=0, tzinfo=tz_taipei)
+    ]
+    for t in push_times:
+        app.job_queue.run_daily(scheduled_push, time=t)
+
+    app.job_queue.run_repeating(check_and_send_game_reminders, interval=60, first=10)
+
+    logging.info("🤖 棒球賽事 Telegram Bot 已啟動...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
