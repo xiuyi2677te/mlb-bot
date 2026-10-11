@@ -39,7 +39,7 @@ MLB_MAP = {
     "Detroit Tigers": "老虎", "Kansas City Royals": "皇家", "Chicago White Sox": "白襪"
 }
 
-# NPB 隊伍完整中文名稱對照表 (含全形/半形/別名)
+# NPB 隊伍完整中文名稱對照表 (完整涵蓋日文原名、全形與簡稱)
 NPB_MAP = {
     "阪神": "阪神虎", "広島": "廣島鯉魚", "巨人": "讀賣巨人", 
     "DeNA": "橫濱", "ＤｅＮＡ": "橫濱", "横浜": "橫濱",
@@ -114,17 +114,17 @@ def get_upcoming_games_list() -> list:
     except Exception as e:
         logging.error(f"MLB fetch error: {e}")
 
-    # [2] NPB 日棒
+    # [2] NPB 日棒 (穩定不漏抓全卡片掃描)
     dates_to_check = [
         now_tw.strftime("%Y-%m-%d"),
         (now_tw + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
     ]
     headers_npb = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8'
     }
 
-    seen_npb_keys = set()
+    seen_npb_pairs = set()
 
     for date_str in dates_to_check:
         url_npb = f"https://baseball.yahoo.co.jp/npb/schedule/?date={date_str}"
@@ -133,13 +133,12 @@ def get_upcoming_games_list() -> list:
             with urllib.request.urlopen(req, context=ssl_ctx, timeout=10) as resp:
                 html = resp.read().decode('utf-8')
                 
-                # 方法 A: PRELOADED STATE JSON 抓取
+                # 優先用 JSON 解析全比賽列表
                 json_match = re.search(r'window\.__PRELOADED_STATE__\s*=\s*({[\s\S]*?});</script>', html)
                 if json_match:
                     try:
                         js_data = json.loads(json_match.group(1))
                         games = js_data.get('schedule', {}).get('games', []) or js_data.get('games', []) or []
-                        
                         for g in games:
                             away_raw = g.get('awayTeam', {}).get('name') or g.get('away', '')
                             home_raw = g.get('homeTeam', {}).get('name') or g.get('home', '')
@@ -152,20 +151,20 @@ def get_upcoming_games_list() -> list:
                                 if now_tw <= g_dt <= future_24h:
                                     away = NPB_MAP.get(away_raw, away_raw)
                                     home = NPB_MAP.get(home_raw, home_raw)
-                                    g_key = f"{away}_{home}_{g_dt.timestamp()}"
-                                    if g_key not in seen_npb_keys:
-                                        seen_npb_keys.add(g_key)
+                                    pair_key = f"{away}_{home}_{g_dt.strftime('%m%d%H%M')}"
+                                    if pair_key not in seen_npb_pairs:
+                                        seen_npb_pairs.add(pair_key)
                                         games_list.append({
-                                            'id': f"NPB_{g_key}",
+                                            'id': f"NPB_{pair_key}",
                                             'league': '⚾ 🇯🇵 NPB 日棒',
                                             'time': g_dt,
                                             'away': away,
                                             'home': home
                                         })
                     except Exception as je:
-                        logging.error(f"NPB JSON parse error: {je}")
+                        logging.error(f"NPB JSON error: {je}")
 
-                # 方法 B: HTML 卡片正則解析備援
+                # HTML 區塊防漏抓比對
                 cards = re.findall(r'class="bb-score__item"[\s\S]*?</section>', html) or \
                         re.findall(r'<div class="bb-score__content">[\s\S]*?</div>\s*</div>', html) or \
                         re.findall(r'<tr class="bb-calendarTable__row">[\s\S]*?</tr>', html)
@@ -184,11 +183,11 @@ def get_upcoming_games_list() -> list:
                         g_dt = datetime.datetime.strptime(f"{date_str} {hh:02d}:{mm}", "%Y-%m-%d %H:%M").replace(tzinfo=tz_tw)
                         
                         if now_tw <= g_dt <= future_24h:
-                            g_key = f"{found_teams[0]}_{found_teams[1]}_{g_dt.timestamp()}"
-                            if g_key not in seen_npb_keys:
-                                seen_npb_keys.add(g_key)
+                            pair_key = f"{found_teams[0]}_{found_teams[1]}_{g_dt.strftime('%m%d%H%M')}"
+                            if pair_key not in seen_npb_pairs:
+                                seen_npb_pairs.add(pair_key)
                                 games_list.append({
-                                    'id': f"NPB_{g_key}",
+                                    'id': f"NPB_{pair_key}",
                                     'league': '⚾ 🇯🇵 NPB 日棒',
                                     'time': g_dt,
                                     'away': found_teams[0],
