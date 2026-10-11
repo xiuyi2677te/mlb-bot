@@ -112,7 +112,7 @@ def get_upcoming_games_list() -> list:
     except Exception as e:
         logging.error(f"MLB fetch error: {e}")
 
-    # [2] NPB 日棒
+    # [2] NPB 日棒 (修正完整抓取所有賽事邏輯)
     dates_to_check = [
         now_tw.strftime("%Y-%m-%d"),
         (now_tw + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
@@ -128,7 +128,10 @@ def get_upcoming_games_list() -> list:
             req = urllib.request.Request(url_npb, headers=headers_npb)
             with urllib.request.urlopen(req, context=ssl_ctx, timeout=10) as resp:
                 html = resp.read().decode('utf-8')
+                
+                # 優先抓取 JSON PRELOADED STATE
                 json_match = re.search(r'window\.__PRELOADED_STATE__\s*=\s*({[\s\S]*?});</script>', html)
+                parsed_via_json = False
                 if json_match:
                     try:
                         js_data = json.loads(json_match.group(1))
@@ -154,34 +157,37 @@ def get_upcoming_games_list() -> list:
                                         'away': away,
                                         'home': home
                                     })
-                    except Exception:
-                        pass
+                                    parsed_via_json = True
+                    except Exception as je:
+                        logging.error(f"NPB JSON parse error: {je}")
 
-                cards = re.findall(r'class="bb-score__item"[\s\S]*?</section>', html) or \
-                        re.findall(r'<div class="bb-score__content">[\s\S]*?</div>\s*</div>', html) or \
-                        re.findall(r'<tr class="bb-calendarTable__row">[\s\S]*?</tr>', html)
-                
-                for card in cards:
-                    found_teams = []
-                    for team_key in NPB_MAP.keys():
-                        if team_key in card and NPB_MAP[team_key] not in found_teams:
-                            found_teams.append(NPB_MAP[team_key])
+                # 若 JSON 無資料，備用 HTML 正則抓取全賽事卡片
+                if not parsed_via_json:
+                    cards = re.findall(r'class="bb-score__item"[\s\S]*?</section>', html) or \
+                            re.findall(r'<div class="bb-score__content">[\s\S]*?</div>\s*</div>', html) or \
+                            re.findall(r'<tr class="bb-calendarTable__row">[\s\S]*?</tr>', html)
                     
-                    if len(found_teams) == 2:
-                        time_match = re.search(r'(\d{1,2}:\d{2})', card)
-                        jst_time = time_match.group(1) if time_match else "18:00"
-                        hh = int(jst_time.split(':')[0]) - 1
-                        mm = jst_time.split(':')[1]
-                        g_dt = datetime.datetime.strptime(f"{date_str} {hh:02d}:{mm}", "%Y-%m-%d %H:%M").replace(tzinfo=tz_tw)
+                    for card in cards:
+                        found_teams = []
+                        for team_key in NPB_MAP.keys():
+                            if team_key in card and NPB_MAP[team_key] not in found_teams:
+                                found_teams.append(NPB_MAP[team_key])
                         
-                        if now_tw <= g_dt <= future_24h:
-                            games_list.append({
-                                'id': f"NPB_{found_teams[0]}_{found_teams[1]}_{g_dt.timestamp()}",
-                                'league': '⚾ 🇯🇵 NPB 日棒',
-                                'time': g_dt,
-                                'away': found_teams[0],
-                                'home': found_teams[1]
-                            })
+                        if len(found_teams) == 2:
+                            time_match = re.search(r'(\d{1,2}:\d{2})', card)
+                            jst_time = time_match.group(1) if time_match else "18:00"
+                            hh = int(jst_time.split(':')[0]) - 1
+                            mm = jst_time.split(':')[1]
+                            g_dt = datetime.datetime.strptime(f"{date_str} {hh:02d}:{mm}", "%Y-%m-%d %H:%M").replace(tzinfo=tz_tw)
+                            
+                            if now_tw <= g_dt <= future_24h:
+                                games_list.append({
+                                    'id': f"NPB_{found_teams[0]}_{found_teams[1]}_{g_dt.timestamp()}",
+                                    'league': '⚾ 🇯🇵 NPB 日棒',
+                                    'time': g_dt,
+                                    'away': found_teams[0],
+                                    'home': found_teams[1]
+                                })
         except Exception as e:
             logging.error(f"NPB fetch error: {e}")
 
@@ -326,7 +332,7 @@ async def test_reminder_command(update: Update, context: ContextTypes.DEFAULT_TY
     await update.message.reply_text("\n".join(lines))
 
 async def post_init(application: Application):
-    """Bot 啟動時自動註冊 Telegram 指令選單選單"""
+    """Bot 啟動時自動註冊 Telegram 指令選單"""
     commands = [
         BotCommand("schedule", "📊 獲取未來24小時棒球賽事戰報"),
         BotCommand("test_reminder", "🧪 測試賽事推播")
