@@ -8,7 +8,7 @@ import ssl
 import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # 設定標準 Log 輸出
@@ -258,7 +258,6 @@ async def check_and_send_game_reminders(context: ContextTypes.DEFAULT_TYPE):
     now_tw = datetime.datetime.now(tz_tw)
     games = get_upcoming_games_list()
 
-    # 定義提醒時間區間 (秒數範圍)
     reminder_rules = [
         {'type': '10min', 'label': '10 分鐘', 'min_sec': 540, 'max_sec': 660},
         {'type': '5min',  'label': '5 分鐘',  'min_sec': 240, 'max_sec': 360}
@@ -278,7 +277,7 @@ async def check_and_send_game_reminders(context: ContextTypes.DEFAULT_TYPE):
             grouped_by_league = {}
             for g, key in target_games:
                 grouped_by_league.setdefault(g['league'], []).append(g)
-                notified_games.add(key)  # 標記已通知
+                notified_games.add(key)
 
             for league_name, lg_games in grouped_by_league.items():
                 lines.append(league_name)
@@ -298,7 +297,7 @@ async def check_and_send_game_reminders(context: ContextTypes.DEFAULT_TYPE):
                     logging.error(f"Reminder push to {cid} failed: {e}")
 
 # ----------------------------------------------------
-# Telegram Bot 指令與定時觸發
+# Telegram Bot 指令處理
 # ----------------------------------------------------
 async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """處理群組中的 /schedule 指令"""
@@ -308,6 +307,31 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         if update.effective_chat:
             await context.bot.send_message(chat_id=update.effective_chat.id, text=report)
+
+async def test_reminder_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """處理群組中的 /test_reminder 指令"""
+    games = get_upcoming_games_list()
+    if not games:
+        await update.message.reply_text("⚠️ 目前未來 24 小時內沒有抓到任何賽事可供測試。")
+        return
+
+    sample_game = games[0]
+    lines = [
+        "🧪 【模擬測試】賽事開打預告 (剩餘 10 分鐘)\n",
+        sample_game['league'],
+        f"{sample_game['time'].strftime('%m/%d %H:%M')} ⏰ {sample_game['away']} vs {sample_game['home']}\n",
+        "──────────────",
+        "‼️ 提醒：比賽即將開始，請確認下注狀況！"
+    ]
+    await update.message.reply_text("\n".join(lines))
+
+async def post_init(application: Application):
+    """Bot 啟動時自動註冊 Telegram 指令選單選單"""
+    commands = [
+        BotCommand("schedule", "📊 獲取未來24小時棒球賽事戰報"),
+        BotCommand("test_reminder", "🧪 測試賽事推播")
+    ]
+    await application.bot.set_my_commands(commands)
 
 async def scheduled_push(context: ContextTypes.DEFAULT_TYPE):
     """定時自動推播"""
@@ -325,15 +349,13 @@ def main():
         logging.critical("❌ 未設定 TELEGRAM_BOT_TOKEN")
         return
 
-    # 背景啟動 HTTP 伺服器
     threading.Thread(target=run_web_server, daemon=True).start()
 
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
     
-    # 註冊 /schedule 指令處理器
     app.add_handler(CommandHandler("schedule", schedule_command))
+    app.add_handler(CommandHandler("test_reminder", test_reminder_command))
 
-    # 1. 🎯 設定每日定時排程 (11:00, 15:00, 23:00)
     tz_taipei = pytz.timezone('Asia/Taipei')
     push_times = [
         datetime.time(hour=11, minute=0, tzinfo=tz_taipei),
@@ -343,10 +365,9 @@ def main():
     for t in push_times:
         app.job_queue.run_daily(scheduled_push, time=t)
 
-    # 2. 🎯 每 60 秒檢查一次賽前 10 分鐘與 5 分鐘提醒
     app.job_queue.run_repeating(check_and_send_game_reminders, interval=60, first=10)
 
-    logging.info("🤖 棒球賽事 Telegram Bot 已啟動（含賽前 10/5 分鐘動態提醒功能）...")
+    logging.info("🤖 棒球賽事 Telegram Bot 已啟動...")
     app.run_polling()
 
 if __name__ == "__main__":
