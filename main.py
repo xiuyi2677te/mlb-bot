@@ -55,18 +55,38 @@ KBO_MAP = {
     "KT": "KT巫師", "삼성": "三星獅"
 }
 
-# NBA 全 30 隊中文名稱對照表
+# NBA 全 30 隊中文名稱對照表 (含簡稱與全稱對照)
 NBA_MAP = {
-    "Atlanta Hawks": "老鷹", "Boston Celtics": "塞爾提克", "Brooklyn Nets": "籃網",
-    "Charlotte Hornets": "黃蜂", "Chicago Bulls": "公牛", "Cleveland Cavaliers": "騎士",
-    "Dallas Mavericks": "獨行俠", "Denver Nuggets": "金塊", "Detroit Pistons": "活塞",
-    "Golden State Warriors": "勇士", "Houston Rockets": "火箭", "Indiana Pacers": "溜馬",
-    "LA Clippers": "快艇", "Los Angeles Lakers": "湖人", "Memphis Grizzlies": "灰熊",
-    "Miami Heat": "熱火", "Milwaukee Bucks": "公鹿", "Minnesota Timberwolves": "灰狼",
-    "New Orleans Pelicans": "鵜鶘", "New York Knicks": "尼克", "Oklahoma City Thunder": "雷霆",
-    "Orlando Magic": "魔術", "Philadelphia 76ers": "76人", "Phoenix Suns": "太陽",
-    "Portland Trail Blazers": "拓荒者", "Sacramento Kings": "國王", "San Antonio Spurs": "馬刺",
-    "Toronto Raptors": "暴龍", "Utah Jazz": "爵士", "Washington Wizards": "奇才"
+    "Hawks": "老鷹", "Atlanta Hawks": "老鷹",
+    "Celtics": "塞爾提克", "Boston Celtics": "塞爾提克",
+    "Nets": "籃網", "Brooklyn Nets": "籃網",
+    "Hornets": "黃蜂", "Charlotte Hornets": "黃蜂",
+    "Bulls": "公牛", "Chicago Bulls": "公牛",
+    "Cavaliers": "騎士", "Cleveland Cavaliers": "騎士",
+    "Mavericks": "獨行俠", "Dallas Mavericks": "獨行俠",
+    "Nuggets": "金塊", "Denver Nuggets": "金塊",
+    "Pistons": "活塞", "Detroit Pistons": "活塞",
+    "Warriors": "勇士", "Golden State Warriors": "勇士",
+    "Rockets": "火箭", "Houston Rockets": "火箭",
+    "Pacers": "溜馬", "Indiana Pacers": "溜馬",
+    "Clippers": "快艇", "LA Clippers": "快艇", "Los Angeles Clippers": "快艇",
+    "Lakers": "湖人", "Los Angeles Lakers": "湖人",
+    "Grizzlies": "灰熊", "Memphis Grizzlies": "灰熊",
+    "Heat": "熱火", "Miami Heat": "熱火",
+    "Bucks": "公鹿", "Milwaukee Bucks": "公鹿",
+    "Timberwolves": "灰狼", "Minnesota Timberwolves": "灰狼",
+    "Pelicans": "鵜鶘", "New Orleans Pelicans": "鵜鶘",
+    "Knicks": "尼克", "New York Knicks": "尼克",
+    "Thunder": "雷霆", "Oklahoma City Thunder": "雷霆",
+    "Magic": "魔術", "Orlando Magic": "魔術",
+    "76ers": "76人", "Philadelphia 76ers": "76人",
+    "Suns": "太陽", "Phoenix Suns": "太陽",
+    "Trail Blazers": "拓荒者", "Portland Trail Blazers": "拓荒者",
+    "Kings": "國王", "Sacramento Kings": "國王",
+    "Spurs": "馬刺", "San Antonio Spurs": "馬刺",
+    "Raptors": "暴龍", "Toronto Raptors": "暴龍",
+    "Jazz": "爵士", "Utah Jazz": "爵士",
+    "Wizards": "巫師", "Washington Wizards": "巫師"
 }
 
 # ----------------------------------------------------
@@ -90,7 +110,7 @@ def run_web_server():
     server.serve_forever()
 
 # ----------------------------------------------------
-# 取得未來 24 小時結構化賽事資料列表 (含 MLB/NPB/KBO/NBA)
+# 取得未來 24 小時結構化賽事資料列表
 # ----------------------------------------------------
 def get_upcoming_games_list() -> list:
     now_tw = datetime.datetime.now(tz_tw)
@@ -213,21 +233,37 @@ def get_upcoming_games_list() -> list:
     except Exception as e:
         logging.error(f"KBO fetch error: {e}")
 
-    # [4] NBA 籃球
+    # [4] NBA 籃球 (修復精準 API 解析邏輯)
     try:
         url_nba = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json"
-        req = urllib.request.Request(url_nba, headers={'User-Agent': 'Mozilla/5.0'})
+        req = urllib.request.Request(url_nba, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'application/json'
+        })
         with urllib.request.urlopen(req, context=ssl_ctx, timeout=10) as resp:
             data = json.loads(resp.read().decode('utf-8'))
             game_dates = data.get('leagueSchedule', {}).get('gameDates', [])
+            
+            seen_nba_ids = set()
             for g_date in game_dates:
                 for g in g_date.get('games', []):
-                    utc_str = g.get('gameDateTimeUTC')
+                    utc_str = g.get('gameDateTimeUTC') or g.get('gameEt')
                     if not utc_str: continue
-                    utc_dt = datetime.datetime.fromisoformat(utc_str.replace('Z', '+00:00'))
-                    game_dt = utc_dt.astimezone(tz_tw)
+                    
+                    try:
+                        if 'Z' in utc_str or '+' in utc_str:
+                            utc_dt = datetime.datetime.fromisoformat(utc_str.replace('Z', '+00:00'))
+                        else:
+                            utc_dt = datetime.datetime.strptime(utc_str, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc)
+                        game_dt = utc_dt.astimezone(tz_tw)
+                    except Exception:
+                        continue
                     
                     if now_tw <= game_dt <= future_24h:
+                        game_id = str(g.get('gameId', ''))
+                        if game_id in seen_nba_ids: continue
+                        seen_nba_ids.add(game_id)
+
                         away_city = g.get('awayTeam', {}).get('teamCity', '')
                         away_name = g.get('awayTeam', {}).get('teamName', '')
                         home_city = g.get('homeTeam', {}).get('teamCity', '')
@@ -236,10 +272,9 @@ def get_upcoming_games_list() -> list:
                         away_full = f"{away_city} {away_name}".strip()
                         home_full = f"{home_city} {home_name}".strip()
                         
-                        away = NBA_MAP.get(away_full, away_name or away_full)
-                        home = NBA_MAP.get(home_full, home_name or home_full)
+                        away = NBA_MAP.get(away_full) or NBA_MAP.get(away_name) or away_name or away_full
+                        home = NBA_MAP.get(home_full) or NBA_MAP.get(home_name) or home_name or home_full
                         
-                        game_id = g.get('gameId', str(game_dt.timestamp()))
                         games_list.append({
                             'id': f"NBA_{game_id}",
                             'league': '🏀 🇺🇸 NBA 籃球',
