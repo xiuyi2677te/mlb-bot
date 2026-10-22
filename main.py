@@ -233,9 +233,8 @@ def get_upcoming_games_list() -> list:
     except Exception as e:
         logging.error(f"KBO fetch error: {e}")
 
-    # [4] NBA 籃球 (改用 ESPN 萬無一失的即時 Schedule API)
+    # [4] NBA 籃球 (ESPN 穩定 Scoreboard API)
     try:
-        # 同時抓取今天與明天的 ESPN NBA API
         dates_nba = [
             now_tw.strftime("%Y%m%d"),
             (now_tw + datetime.timedelta(days=1)).strftime("%Y%m%d")
@@ -312,15 +311,16 @@ def build_full_report() -> str:
     return "\n".join(lines)
 
 # ----------------------------------------------------
-# 即時開打提醒邏輯 (賽前 10 分鐘與 5 分鐘)
+# 即時開打提醒邏輯 (賽前 10 分鐘與 5 分鐘，放大彈性過濾緩衝)
 # ----------------------------------------------------
 async def check_and_send_game_reminders(context: ContextTypes.DEFAULT_TYPE):
     now_tw = datetime.datetime.now(tz_tw)
     games = get_upcoming_games_list()
 
+    # 放寬判斷區間，避免 Server 網路微幅延遲導致完全漏抓發送
     reminder_rules = [
-        {'type': '10min', 'label': '10 分鐘', 'min_sec': 540, 'max_sec': 660},
-        {'type': '5min',  'label': '5 分鐘',  'min_sec': 240, 'max_sec': 360}
+        {'type': '10min', 'label': '10 分鐘', 'min_sec': 480, 'max_sec': 720}, # 8~12 分鐘
+        {'type': '5min',  'label': '5 分鐘',  'min_sec': 180, 'max_sec': 420}  # 3~7 分鐘
     ]
 
     for rule in reminder_rules:
@@ -353,6 +353,7 @@ async def check_and_send_game_reminders(context: ContextTypes.DEFAULT_TYPE):
             for cid in chat_ids:
                 try:
                     await context.bot.send_message(chat_id=cid, text=msg)
+                    logging.info(f"✅ 成功發送 {rule['label']} 賽前提醒給群組 {cid}")
                 except Exception as e:
                     logging.error(f"Reminder push to {cid} failed: {e}")
 
@@ -425,6 +426,7 @@ def main():
     for t in push_times:
         app.job_queue.run_daily(scheduled_push, time=t)
 
+    # 60 秒輪詢檢測賽前提醒
     app.job_queue.run_repeating(check_and_send_game_reminders, interval=60, first=10)
 
     logging.info("🤖 體育賽事 Telegram Bot 已啟動（包含 MLB/NPB/KBO/NBA）...")
